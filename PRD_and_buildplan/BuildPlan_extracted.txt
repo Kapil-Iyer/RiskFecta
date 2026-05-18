@@ -1,0 +1,327 @@
+RiskFecta
+Complete Build Plan — Scratch to Deployment
+v1.0  |  February 2026  |  PRD v4 locked  |  85-90 hrs  |  LSTM gets 20% buffer
+Tools: Cursor Pro  |  Claude Pro  |  ChatGPT Plus  |  Gemini 3.0 Pro  |  No Claude Code  |  No Antigravity
+
+Ground Rules — Read Before Session 1
+No new features after Phase 6. Scope is locked. If something feels cool, ask: does it map to a resume signal? If no — do not add it.
+Phase 3 (LSTM) gets 20% time buffer. If it runs over, that is expected. Do not rush it and introduce leakage.
+Paste every rolling-window loop to Claude Pro for leakage audit before running training. Do not assume Cursor's code is leak-free.
+UNIQUE constraints must be enforced in schema.sql before any ingestion script runs. Run ingestion twice to confirm no duplicate rows.
+Risk-free rate = USGG10YR / 252 everywhere. No T-bill. No exceptions.
+Covariance matrix uses actual realized returns only — never predicted returns.
+Zero returns excluded from directional accuracy denominator — implement this explicitly in evaluation code.
+PostgreSQL deployment provider: Supabase (default) or Neon. Never hardcode vendor in application code — use environment variable for connection string.
+
+Tool Roles — One Job Each
+Cursor Pro — primary coding environment every session. All file creation, editing, multi-file context, autocomplete. Always open.
+Claude Pro (Sonnet 4.6) — ML correctness reviewer. PyTorch LSTM architecture, rolling-window leakage audits, PostgreSQL schema, optimizer math, resume bullets. Highest value in Phases 3-6.
+ChatGPT Plus (5.2) — Tableau owner. All dashboard design, calculated fields, layout. Phase 8 only.
+Gemini 3.0 Pro — fast scaffolding. Streamlit layout boilerplate, Plotly chart scaffolding. Phase 7 only.
+
+Pre-Build Setup
+One session, ~3 hrs. Complete entirely before touching pipeline code.
+
+Step 1 — GitHub + Environment
+[Cursor Pro]  Create repo, folder structure, requirements.txt
+
+Create GitHub repo RiskFecta, clone locally, open in Cursor Pro permanently
+Create requirements.txt first with pinned versions, then pip install -r requirements.txt
+torch==2.2.0, xgboost==2.0.3, scikit-learn==1.4.0, psycopg2-binary==2.9.9, pandas==2.2.0, numpy==1.26.4, scipy==1.12.0, plotly==5.18.0, streamlit==1.31.0, pandas-ta==0.3.14b
+Create full folder structure from PRD v4 file tree — all empty folders and __init__.py placeholders
+.gitignore: exclude .env, *.csv (data files), *.pt (model weights if large), __pycache__
+
+Step 2 — PostgreSQL Setup
+[Claude Pro]  Generate schema.sql with all constraints
+
+Ask Claude Pro to generate schema.sql — all 5 tables with correct types, UNIQUE constraints, and USGG10YR/252 note
+Set up local PostgreSQL instance for development. Install psycopg2, test connection.
+Create .env file: DATABASE_URL=postgresql://localhost/riskfecta — never commit to GitHub
+Run schema.sql to create all 5 tables. Verify in psql or pgAdmin.
+
+Step 3 — Config
+[Claude Pro]  Generate config.py
+
+Ask Claude Pro to generate config.py — ticker universe (40-50 S&P 500 stocks, Tech + Finance), feature column lists, rolling window constants (TRAIN_WINDOW=252, STEP=21, LSTM_SEQ=60, FORECAST_HORIZON=30), file paths
+
+ℹ NOTE: Read PRD v4 end-to-end before Session 1. Know the full system — especially the rolling window pseudocode and look-ahead bias rules — before building any module.
+
+Phase 1 — Bloomberg Data Pull + Ingestion
+Sessions 1-2  |  ~10 hrs  |  Files: pipeline/ingest.py, data/raw/ CSVs, PostgreSQL prices_raw table
+
+Step A — Bloomberg Terminal (Campus)
+[Self]  On-campus terminal session
+
+Use BQL editor or Excel Bloomberg add-in on campus terminal
+Pull 1: Multi-asset price panel — PX_LAST, PX_OPEN, PX_HIGH, PX_LOW, PX_VOLUME, EQY_TOTAL_RETURN_INDEX — all tickers in one BQL query, 5 years daily → export prices_raw.csv
+Pull 2: Static equity fields — CUR_MKT_CAP, BETA_RAW_OVERRIDABLE, DVD_YLD_IND, GICS_SECTOR_NAME per ticker → export static_fields.csv
+Pull 3: Macro indices daily — VIX Index, USGG10YR Index, SPX Index total return → export macro.csv
+Copy all 3 CSVs to laptop via USB/email. Store in data/raw/ — gitignored.
+
+Step B — Ingestion Pipeline
+[Cursor Pro]  Build pipeline/ingest.py
+
+Load prices_raw.csv → parse dates → normalize tickers → INSERT INTO prices_raw using ON CONFLICT (ticker, date) DO NOTHING
+Load static_fields.csv → log-transform market cap → INSERT static data into features table static columns
+Load macro.csv → align dates to trading calendar → store in features table macro columns
+Run ingestion twice — confirm UNIQUE constraints fire on second run, no duplicate rows created
+
+[Claude Pro]  Review ingest.py for schema alignment
+
+Paste ingest.py to Claude Pro — verify ON CONFLICT handling is correct for all 3 tables
+
+✓ TEST: prices_raw populated with 40-50 tickers x 5 years. Run ingestion twice — row count identical both times. UNIQUE constraint working.
+
+Phase 2 — Feature Engineering
+Sessions 3-4  |  ~8 hrs  |  File: pipeline/features.py
+
+[Cursor Pro]  Build pipeline/features.py
+
+Compute all technical indicators using pandas-ta library (clean, vectorized, backward-looking by default):
+RSI: pandas_ta.rsi(close, length=14) — uses t-13 through t only
+MACD: pandas_ta.macd(close, fast=12, slow=26, signal=9)
+Bollinger Bands: pandas_ta.bbands(close, length=20)
+Rolling volatility: close.pct_change().rolling(20).std() * sqrt(252) — annualized
+Momentum 3m: close / close.shift(63) - 1 (63 trading days ≈ 3 months)
+Momentum 6m: close / close.shift(126) - 1
+Compute SPX daily return from macro.csv: spx_return = spx.pct_change()
+All features written to features table using ON CONFLICT (ticker, date) DO NOTHING
+Verify no forward-looking computation: every indicator's lookback period must end at date t
+
+[Claude Pro]  Verify no look-ahead in feature computation
+
+Paste features.py to Claude Pro — ask to explicitly verify each indicator uses only backward-looking data relative to date t
+
+⚠ CRITICAL: pandas-ta computes indicators correctly by default — but verify rolling windows are not accidentally using future rows if you sort or reset index incorrectly. Sort by (ticker, date) ascending before computing.
+
+✓ TEST: features table fully populated. Spot-check: RSI for AAPL on 2023-01-15 computed only from 2022-12-27 to 2023-01-15. No NaN rows in critical columns.
+
+Phase 3 — LSTM Model (20% Time Buffer)
+Sessions 5-7  |  ~18 hrs  |  File: models/lstm.py  |  Highest-risk phase — take it slow
+
+Architecture
+[Cursor Pro]  Build models/lstm.py
+
+PyTorch LSTM class: 2-layer LSTM, hidden_size=64, Dropout(0.2), Linear output layer → scalar return prediction
+Input tensor shape per sample: (batch_size, 60, n_features) — 60-day sequence, n_features = OHLCV + RSI + MACD + BB + vol + momentum
+Target: 30-day forward return (scalar) — normalized with StandardScaler, inverse-transform after prediction
+Loss: MSE on normalized returns. Optimizer: Adam, lr=1e-3. Epochs: 50 with early stopping (patience=10)
+
+Rolling Window Training Loop
+[Claude Pro]  Review every iteration of rolling-window loop for leakage
+
+Implement exact pseudocode from PRD v4 Section 4 — no deviation
+Sequence construction: within each training window [t-252:t], build all valid 60-day sequences ending before t
+Valid sequences: start at t-252, end at t-60 minimum — gives (252-60) = 192 sequences per ticker per window
+Training data: DataLoader with batch_size=32, shuffle=True within training window only
+Prediction at t: single forward pass on sequence [t-60:t] — strictly within or at training window boundary
+Refit model from scratch each window step — no weight transfer between windows (prevents temporal leakage via model state)
+Store predictions: INSERT INTO predictions (ticker, forecast_date, target_date, lstm_pred) with ON CONFLICT DO NOTHING
+
+⚠ CRITICAL: Paste your rolling-window training loop to Claude Pro BEFORE running it. Leakage here invalidates the entire backtest. The most common mistake: accidentally including sequences that cross the t boundary.
+
+Compute Resources
+Train on Google Colab (free GPU) if laptop CPU is too slow — LSTM training on CPU can take hours
+Save trained model weights to models/lstm_weights_{window_id}.pt after each window
+Inference runs on CPU fine — only training needs GPU
+
+✓ TEST: LSTM predictions populated in predictions table for all rolling windows. Directional accuracy logged per ticker per window. Fallback: if training too slow, simplify to single-layer LSTM with hidden_size=32.
+
+Phase 4 — XGBoost Model
+Sessions 8-9  |  ~10 hrs  |  File: models/xgboost_model.py
+
+[Cursor Pro]  Build models/xgboost_model.py
+
+XGBRegressor with starting params: n_estimators=300, max_depth=6, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8
+Input: tabular feature vector per (ticker, date) — beta, mkt_cap_log, div_yield, sector_encoded, vix, yield_10y, spx_return, momentum_3m, momentum_6m, volatility_20d
+Target: 30-day forward return — same normalization as LSTM for consistent ensemble combination
+Rolling window loop: same t range as LSTM — train on features[t-252:t], predict at t
+Run GridSearchCV if out-of-sample R² < 0.05 on validation windows
+Store XGBoost predictions: UPDATE predictions SET xgb_pred = ? WHERE ticker = ? AND forecast_date = ?
+
+[Claude Pro]  Verify XGBoost rolling-window loop
+
+Paste xgboost_model.py rolling loop to Claude Pro — confirm same leakage rules as LSTM apply, no future features used
+
+✓ TEST: xgb_pred column populated in predictions table for all windows. XGBoost trains in minutes on CPU — no Colab needed.
+
+Phase 5 — Ensemble + Evaluation
+Session 10  |  ~6 hrs  |  File: models/ensemble.py
+
+[Cursor Pro]  Build models/ensemble.py
+
+Compute: ensemble_pred = 0.5 * lstm_pred + 0.5 * xgb_pred — for all rows where both predictions exist
+UPDATE predictions SET ensemble_pred = (lstm_pred + xgb_pred) / 2.0 WHERE lstm_pred IS NOT NULL AND xgb_pred IS NOT NULL
+Fill actual_return: when target_date has passed, compute actual 30-day return from prices_raw and UPDATE predictions
+Compute directional_correct: sign(ensemble_pred) == sign(actual_return). Exclude rows where actual_return = 0.
+Evaluation metrics to log to console and store in risk_metrics table:
+Overall directional accuracy: sum(directional_correct) / count(non-zero actual_return)
+Per-asset directional accuracy breakdown
+R² and RMSE for ensemble vs actual returns
+LSTM vs XGBoost individual directional accuracy comparison
+
+[Claude Pro]  Review ensemble logic and evaluation metrics
+
+Paste ensemble.py to Claude Pro — verify directional accuracy excludes zero returns, verify actual_return fill logic uses only prices that have passed target_date
+
+✓ TEST: ensemble_pred, actual_return, directional_correct all populated. Overall directional accuracy printed. Note: 52-58% is realistic and acceptable — do not expect 70%+.
+
+Phase 6 — Portfolio Optimizer
+Sessions 11-12  |  ~10 hrs  |  File: optimizer/portfolio.py
+
+[Cursor Pro]  Build optimizer/portfolio.py
+
+Inputs: ensemble_pred vector (expected returns per asset) + covariance matrix from actual realized returns in training window
+Covariance: cov_matrix = returns_df[t-252:t].cov() * 252 — annualized. Uses actual returns only, not predicted.
+SciPy optimizer: minimize portfolio variance subject to target return constraint
+Constraints: weights sum to 1, all weights >= 0 (long-only), optional max 20% per asset
+Solver: SLSQP — handles linear equality and inequality constraints
+Verify covariance matrix is positive definite before passing to optimizer — add explicit check
+Generate Efficient Frontier: run optimizer for 50 target return values between min and max feasible return
+Compute risk metrics per optimal portfolio:
+Portfolio return, portfolio volatility (annualized)
+Sharpe ratio: (portfolio_return - USGG10YR/252*252) / portfolio_volatility
+VaR 95%: portfolio_return - 1.645 * portfolio_volatility (parametric)
+Max drawdown: computed from portfolio return series in prices_raw window
+Store all results in portfolios table and risk_metrics table with run_id
+
+[Claude Pro]  Review optimizer math
+
+Paste portfolio.py to Claude Pro — verify covariance matrix uses actual returns, Sharpe uses USGG10YR/252, positive-definite check is correct
+
+⚠ CRITICAL: If optimizer fails to converge: tighten weight bounds (0.02 to 0.15 per asset), check covariance matrix condition number, reduce universe size temporarily for debugging.
+
+✓ TEST: portfolios table populated with Efficient Frontier weights for multiple target returns. risk_metrics table has Sharpe, VaR, max drawdown per run_id. Sharpe ratio is positive for at least some portfolio points.
+
+Phase 7 — Streamlit App + Plotly
+Sessions 13-14  |  ~10 hrs  |  Files: app/main.py, app/pages/
+
+Pre-Step — Supabase/Neon Setup
+[Self]  Set up cloud PostgreSQL for Streamlit Cloud
+
+Create Supabase (default) or Neon project — both free tier
+Run schema.sql on cloud instance — identical to local schema
+Export local PostgreSQL data, import to cloud instance
+Add DATABASE_URL to Streamlit Cloud secrets (st.secrets) — never hardcode
+
+App Build
+[Gemini]  Scaffold Streamlit multi-page app and Plotly charts
+
+Ask Gemini to scaffold app/main.py and 5 page files using PRD v4 Section 7 as spec
+Gemini is fast at Streamlit layout boilerplate and Plotly chart code — use it for scaffold, not logic
+
+[Cursor Pro]  Wire pages to PostgreSQL, clean up scaffold
+
+Page 1 — Home/Dashboard: portfolio weights donut chart, total return vs SPY benchmark line, Sharpe KPI cards. Source: portfolios + risk_metrics.
+Page 2 — Efficient Frontier: interactive Plotly scatter (risk vs return), hover shows weights + Sharpe. Source: portfolios table.
+Page 3 — Return Predictions: bar chart ensemble pred vs actual per asset, color-coded by directional_correct. Source: predictions table.
+Page 4 — Model Performance: rolling directional accuracy line (LSTM vs XGBoost vs Ensemble). Source: predictions table.
+Page 5 — Risk Decomposition: VaR by asset bar chart, max drawdown timeline. Source: risk_metrics table.
+All DB queries use st.cache_data with 1-hour TTL — prevent redundant PostgreSQL calls
+
+[Claude Pro]  Review DB query layer and caching
+
+Paste app database query functions to Claude Pro — verify st.cache_data used correctly, no connection leaks
+
+✓ TEST: Streamlit app runs locally with cloud DB. Deploy to Streamlit Cloud. All 5 pages render. Test public URL in incognito. Add link to README and portfolio.
+
+Phase 8 — Tableau Report
+Sessions 15-16  |  ~8 hrs  |  File: tableau/RiskFecta_Report.twbx
+
+[ChatGPT]  Tableau design — ChatGPT owns this phase entirely
+
+Ask ChatGPT for all calculated fields, table connections, and visual layout for 3 dashboards before opening Tableau Desktop
+Dashboard 1 — Portfolio Analytics: Efficient Frontier viz, optimal weights bar, risk-return summary table
+Dashboard 2 — Model Performance: LSTM vs XGBoost accuracy comparison, rolling directional accuracy, R² over time
+Dashboard 3 — Risk Report: VaR by asset heatmap, sector exposure bar, Sharpe vs SPY benchmark
+
+[Self]  Build dashboards in Tableau Desktop
+
+Connect Tableau to PostgreSQL via native connector (Tableau Desktop supports PostgreSQL natively)
+Build 3 dashboards using ChatGPT's calculated fields and layout guidance
+Artifact policy: publish to Tableau Public for shareable link. If file too large, export as PDF and commit to tableau/docs/
+
+✓ TEST: 3 Tableau dashboards built. Tableau Public link or PDF in repo. Link added to README.
+
+Phase 9 — Polish + Deploy
+Session 17  |  ~5 hrs  |  Tests, README, GitHub, portfolio embed
+
+[Cursor Pro]  Tests + README
+
+Write tests/test_pipeline.py — unit tests for ingest (UNIQUE constraint), feature computation (no NaN in RSI), ensemble (directional accuracy > 0.45 threshold)
+Final README: project overview, architecture summary, Bloomberg data sourcing note, setup instructions, Streamlit link, Tableau link, data privacy warning (.env and data/raw/ gitignored)
+
+[Claude Pro]  Final review + resume bullets
+
+Paste README to Claude Pro — review for clarity and professionalism
+Ask Claude Pro to generate final resume bullets using actual measured metrics from risk_metrics table and predictions table
+Ask Claude Pro for final architecture review — confirm nothing drifted from PRD v4
+
+GitHub final: tag release v1.0, add Streamlit and Tableau links to repo description
+Portfolio website: add RiskFecta card with Streamlit live demo link and GitHub link
+Fix PlainCents portfolio card: K-Means accuracy belongs to categorization, Random Forest metric is MAPE < 15% — not accuracy %
+
+✓ TEST: pytest passes. README renders on GitHub. Streamlit link opens in incognito. Tableau link or PDF accessible. .env and data/raw/ confirmed gitignored.
+
+Complete Summary
+Phase
+Focus
+Tool Lead
+Hrs
+Key Output
+Pre-Build
+GitHub, PostgreSQL, requirements.txt, schema.sql, config.py
+Cursor + Claude
+3
+Repo + DB scaffold live
+Phase 1
+Bloomberg CSV pull + PostgreSQL ingestion (ingest.py)
+Cursor + Claude + Self
+10
+prices_raw populated, UNIQUE constraints verified
+Phase 2
+Feature engineering — all indicators Python-computed (features.py)
+Cursor + Claude
+8
+features table complete, no look-ahead
+Phase 3
+LSTM rolling-window training (lstm.py) — 20% buffer
+Cursor + Claude + Colab
+18
+lstm_pred in predictions table
+Phase 4
+XGBoost rolling-window training (xgboost_model.py)
+Cursor + Claude
+10
+xgb_pred in predictions table
+Phase 5
+Ensemble + evaluation metrics (ensemble.py)
+Cursor + Claude
+6
+ensemble_pred, directional accuracy logged
+Phase 6
+MPT optimizer + Efficient Frontier (portfolio.py)
+Cursor + Claude
+10
+portfolios + risk_metrics populated
+Phase 7
+Streamlit Cloud app + Plotly (app/)
+Gemini + Cursor + Claude
+10
+Live Streamlit URL, 5 pages working
+Phase 8
+Tableau 3 dashboards
+ChatGPT + self
+8
+Tableau Public link or PDF in repo
+Phase 9
+Tests, README, GitHub polish, portfolio embed
+Cursor + Claude
+5
+v1.0 tagged, all demo links live
+
+Total: ~88 hrs  |  17 sessions  |  No Claude Code. No Antigravity. No regime classifier. No extra macro fields. Scope locked.
+
+Phase 3 buffer rule: if LSTM training exceeds 20 hrs, simplify to single-layer hidden_size=32. Ship working model over architecturally perfect one. MAPE and directional accuracy matter more than model complexity.
+
+RiskFecta Build Plan  |  Kapil Iyer  |  University of Waterloo  |  2026

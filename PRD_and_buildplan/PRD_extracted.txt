@@ -1,0 +1,558 @@
+RiskFecta
+Quantitative Portfolio Intelligence Platform
+Product Requirements Document  |  v1.0  |  February 2026
+Architecture locked. All ML decisions pre-validated. Interview-defensible throughout.
+ML Architecture
+LSTM (sequential) + XGBoost (tabular) → weighted ensemble → SciPy Efficient Frontier
+Validation
+Rolling window: 252-day train, 21-day step. True out-of-sample test period.
+Data Source
+Bloomberg Terminal BQL + Excel API → CSV → local PostgreSQL. No laptop API scripting.
+Deployment
+Streamlit Cloud (interactive Plotly demo) + Tableau (static professional report)
+Scope
+75-80 hrs. Polished internship-tier quant project.
+No Overlap
+Streamlit is RiskFecta only. SQLite/PowerBI is PlainCents only. Tableau is RiskFecta only.
+
+1. Project Identity
+What RiskFecta Is
+A quantitative portfolio analytics platform combining ML return forecasting with mathematical portfolio optimization
+A hybrid forecasting engine: LSTM (deep learning on price sequences) + XGBoost (tabular macro/factor model) → weighted ensemble
+A portfolio optimizer using Modern Portfolio Theory: ensemble expected returns + historical covariance → SciPy Efficient Frontier
+An institutional-grade data pipeline: Bloomberg Terminal BQL/Excel → CSV → PostgreSQL → Python modeling
+A deployed web application on Streamlit Cloud with interactive Plotly charts + a separate Tableau static report
+
+What RiskFecta Is NOT
+Not a trading system, live order execution platform, or paper trading engine
+Not a SQLite or PowerBI project — those belong exclusively to PlainCents
+Not a Bloomberg API scripting project — data sourced via BQL/Excel export only, terminal-bound
+Not a single-model project — the ensemble of LSTM + XGBoost is the core differentiator
+Not a regime classifier — XGBoost acts as alternative return predictor, not regime switcher
+
+2. Problem Statement & Solution
+Problem
+Professional portfolio optimization tools (Bloomberg PORT, FactSet) cost $20,000+ per year and are inaccessible to retail investors. Existing free tools use only historical averages for expected returns, ignoring forward-looking ML signals. There is no accessible platform that combines deep learning return forecasting, classical ML factor models, and mathematically rigorous portfolio optimization in a single deployable system.
+
+Solution
+RiskFecta is a Python ML platform that ingests Bloomberg Terminal data via BQL/Excel export, trains a hybrid LSTM + XGBoost ensemble to predict 30-day asset returns, feeds ensemble predictions into SciPy-based Modern Portfolio Theory optimization to compute the Efficient Frontier, and presents results through a Streamlit Cloud web application with interactive Plotly visualizations and a separate Tableau professional report.
+
+3. Tech Stack & Roles
+Every tool has a specific, non-overlapping role. RiskFecta and PlainCents use different tools intentionally — this signals architectural maturity.
+
+Technology
+Specific Role in RiskFecta
+Python
+Core language — all pipeline, modeling, optimization, deployment logic
+PyTorch
+LSTM model implementation — sequential price history → 30-day return prediction
+XGBoost
+Tabular factor model — macro features → 30-day return prediction (explicitly listed, not implied by scikit-learn)
+scikit-learn
+Preprocessing (StandardScaler, LabelEncoder), model evaluation utilities, helper wrappers
+SciPy
+Efficient Frontier computation via constrained optimization (scipy.optimize.minimize)
+NumPy
+Covariance matrix computation, return vector assembly, numerical operations
+PostgreSQL
+Multi-table time-series data store: raw prices, features, predictions, portfolio weights, risk metrics
+Bloomberg Terminal (BQL + Excel API)
+Institutional data source: PX_LAST, total return, volume, beta, sector, market cap, dividend yield, VIX. BQL for efficient multi-asset panel queries. Excel export → CSV → pipeline.
+Plotly
+Interactive charts inside Streamlit app: Efficient Frontier plot, return prediction chart, risk decomposition
+Streamlit Cloud
+Deployment platform for interactive web application — live demo link for portfolio and interviews
+Tableau
+Separate static professional report: polished portfolio analytics for recruiter-facing presentation
+
+4. ML Architecture (Locked)
+Overview: Hybrid Ensemble → Portfolio Optimization
+The ML pipeline has two parallel prediction tracks that produce a single expected return vector, which feeds into the optimizer.
+
+Track 1 — LSTM (Sequential Price Model)
+Framework: PyTorch — custom LSTM class with configurable hidden layers
+Input: 60-day rolling window of daily OHLCV data + technical indicators per asset
+Technical indicators: RSI (14-day), MACD (12/26/9), Bollinger Bands (20-day), rolling 20-day volatility
+Output: Predicted 30-day forward return per asset (scalar per ticker)
+Architecture: 2-layer LSTM → Dropout(0.2) → Linear output layer
+Loss function: MSE on normalized returns
+Training: Mini-batch gradient descent, Adam optimizer, learning rate 1e-3
+
+Track 2 — XGBoost (Tabular Factor Model)
+Framework: xgboost Python library — XGBRegressor
+Input: Tabular feature vector per asset per month — macro + factor features
+Features: VIX level, sector momentum (30-day), market cap (log), beta, dividend yield, 3-month price momentum, 6-month price momentum
+All features sourced from Bloomberg BQL export — stored in PostgreSQL features table
+Output: Predicted 30-day forward return per asset (scalar per ticker)
+Hyperparameters: n_estimators=300, max_depth=6, learning_rate=0.05, subsample=0.8
+Tune with GridSearchCV if out-of-sample R² < 0.1
+
+Ensemble — Weighted Average
+Final expected return per asset = 0.5 × LSTM_prediction + 0.5 × XGBoost_prediction
+Equal weighting as starting point — defensible and simple. Can tune weights in post if time allows.
+Ensemble output is a vector of expected returns, one per asset in universe
+This vector feeds directly into the portfolio optimizer as the expected returns input
+
+Validation — Rolling Window (Pseudocode Locked)
+Method: Rolling window with FIXED train size — NOT expanding window (PlainCents uses expanding; this is an intentional architectural difference)
+Train window: 252 trading days (1 calendar year)
+Step size: 21 trading days (1 calendar month)
+True out-of-sample holdout: final 3 months of data reserved, never touched until final evaluation
+
+Exact pseudocode — implement this loop precisely in forecast.py:
+for t in range(252, N - 30, 21):
+    train_data  = data[t - 252 : t]      # fixed 252-day window, grows by step
+    forecast_date = dates[t]             # prediction made at end of training window
+    target_date   = dates[t + 30]        # strictly 30 trading days ahead
+
+    # Fit models on train_data only
+    lstm_model.fit(train_data)
+    xgb_model.fit(train_data)
+
+    # Predict forward return — no future data visible
+    lstm_pred    = lstm_model.predict(data[t - 60 : t])   # 60-day input sequence
+    xgb_pred     = xgb_model.predict(features_at_t)       # features at t only
+    ensemble     = 0.5 * lstm_pred + 0.5 * xgb_pred
+
+    # Store: actual_return filled post-facto when target_date passes
+    insert_prediction(ticker, forecast_date, target_date, lstm_pred, xgb_pred, ensemble)
+
+Look-ahead bias clarification: All technical indicators (RSI, MACD, Bollinger Bands, rolling volatility, momentum) are computed using backward-looking rolling windows only. RSI at date t uses prices t-13 through t. No forward data is used in feature construction. During rolling-window validation, the model sees only training slice features — never features computed from the test window.
+LSTM sequence clarification: LSTM training dataset consists of sliding 60-day sequences constructed within the 252-day training window only. lstm_model.fit(train_data) refers to fitting on these sequences — not raw rows. Each sequence is a (60, n_features) tensor. No sequence crosses the training window boundary.
+
+Portfolio Optimization — Modern Portfolio Theory
+Inputs: Expected returns vector (from ensemble) + historical covariance matrix (252-day rolling window of actual realized returns — not predicted returns. Covariance computed from actual returns within training window only to prevent look-ahead contamination)
+Method: scipy.optimize.minimize with SLSQP solver — minimize portfolio variance subject to target return constraint
+Constraints: weights sum to 1, all weights >= 0 (long-only), optional sector weight caps
+Output: Efficient Frontier curve + optimal weights per asset for multiple risk targets
+Risk metrics computed: Portfolio return, portfolio volatility (annualized), Sharpe ratio (risk-free = USGG10YR / 252 daily proxy — consistent across optimizer, risk_metrics table, Streamlit display, and Tableau report), max drawdown, VaR (95%)
+
+5. Data Pipeline — Bloomberg Terminal Workflow
+Architecture Decision: Minimalist Pull + Local Engineering
+Bloomberg provides raw atomic fields only. All technical indicators (RSI, MACD, Bollinger Bands, rolling volatility, momentum) are computed locally in Python from raw prices. This keeps the pipeline reproducible, transparent, quota-efficient, and interview-defensible.
+
+In interviews: 'Sourced historical price and factor data via Bloomberg Terminal BQL. Engineered technical indicators locally in Python for reproducibility and model transparency.' This signals both institutional data access and engineering rigour.
+
+Locked Bloomberg Pull — Final Field List
+This is the complete Bloomberg pull. Nothing else. Everything else is Python.
+
+Category
+Bloomberg Fields + Purpose
+Price History — Daily, 5 years
+PX_LAST, PX_OPEN, PX_HIGH, PX_LOW, PX_VOLUME — raw OHLCV for LSTM input sequences and return calculation
+Total Return Index
+EQY_TOTAL_RETURN_INDEX (or TR field) — used for actual 30-day return calculation (dividends included)
+Static Equity Fields (one-time pull)
+CUR_MKT_CAP, BETA_RAW_OVERRIDABLE, DVD_YLD_IND, GICS_SECTOR_NAME — tabular XGBoost features + sector constraints
+Macro — Daily
+VIX Index, USGG10YR Index (10-year yield), SPX Index — macro context features for XGBoost
+
+What Is NOT Pulled from Bloomberg
+RSI, MACD, Bollinger Bands — computed in Python from PX_LAST/PX_HIGH/PX_LOW (pandas_ta or manual computation)
+Rolling volatility, momentum_3m, momentum_6m — computed in Python from price history
+Implied volatility, breakeven inflation, DXY — not needed for return prediction architecture
+PE ratio, EV/EBITDA — fundamental valuation metrics not in locked feature set
+30-day realized vol from Bloomberg — computed locally instead
+
+Asset Universe
+40-50 stocks: S&P 500 constituents, Technology + Financial Services sectors
+Rationale: manageable size for campus terminal quota, sector diversity, strong Bloomberg data availability
+Pull all tickers in a single BQL query — most quota-efficient approach
+
+BQL Campus Workflow (Terminal-Bound)
+Step 1: On campus terminal — open BQL editor or Excel with Bloomberg add-in
+Step 2: Use BQL for multi-asset price panel pull (PX_LAST, OHLCV, TR) — single query for all tickers
+Step 3: Separate BQL/BDP query for static fields (BETA, MKT_CAP, SECTOR, DVD_YLD) — one-time pull
+Step 4: Pull macro indices (VIX, USGG10YR, SPX) as separate daily series
+Step 5: Export all results to CSV files, copy to laptop via USB/email
+Step 6: Load CSVs into local PostgreSQL via Python ingest script — all modeling from here
+Step 7: Run Python feature engineering pipeline to compute all technical indicators from raw prices
+
+Risk-free rate for Sharpe ratio: use USGG10YR / 252 as daily risk-free rate (already in macro pull). No separate T-bill field needed.
+
+6. Database Schema (PostgreSQL — 5 Tables)
+PostgreSQL is correct for RiskFecta: multi-table time-series data, feature store behavior, production-grade infrastructure. Architecturally distinct from PlainCents' SQLite.
+
+Table 1: prices_raw
+Bloomberg BQL price export. Loaded once from CSV, never modified. UNIQUE constraint prevents double-ingestion corruption.
+Column
+Type
+Constraints
+Purpose
+id
+SERIAL
+PRIMARY KEY
+Unique row ID
+ticker
+VARCHAR(20)
+NOT NULL
+Asset ticker symbol
+date
+DATE
+NOT NULL
+Trading date
+open
+NUMERIC(12,4)
+
+Opening price (PX_OPEN)
+high
+NUMERIC(12,4)
+
+Daily high (PX_HIGH)
+low
+NUMERIC(12,4)
+
+Daily low (PX_LOW)
+close
+NUMERIC(12,4)
+NOT NULL
+Closing price (PX_LAST)
+volume
+BIGINT
+
+Daily volume (PX_VOLUME)
+total_return_idx
+NUMERIC(12,4)
+
+Bloomberg TR index (dividends included)
+—
+—
+UNIQUE (ticker, date)
+Prevents double-ingestion on re-run
+
+Table 2: features
+Two categories of features: (A) Python-computed from prices_raw — technical indicators engineered locally. (B) Bloomberg-sourced static + macro fields loaded from CSV. Never mix sources in same pipeline step.
+Column
+Type
+Source
+Purpose
+id
+SERIAL
+—
+PRIMARY KEY — Unique row ID
+ticker
+VARCHAR(20)
+—
+Asset ticker (NOT NULL)
+date
+DATE
+—
+Feature date (NOT NULL)
+rsi_14
+NUMERIC(8,4)
+Python (pandas_ta)
+14-day RSI computed from PX_LAST
+macd
+NUMERIC(10,4)
+Python (pandas_ta)
+MACD line (12/26)
+macd_signal
+NUMERIC(10,4)
+Python (pandas_ta)
+MACD signal line (9)
+bb_upper
+NUMERIC(12,4)
+Python (pandas_ta)
+Bollinger Band upper (20-day)
+bb_lower
+NUMERIC(12,4)
+Python (pandas_ta)
+Bollinger Band lower (20-day)
+volatility_20d
+NUMERIC(8,4)
+Python (rolling std)
+20-day annualized rolling volatility
+momentum_3m
+NUMERIC(8,4)
+Python (price ratio)
+3-month price momentum from PX_LAST
+momentum_6m
+NUMERIC(8,4)
+Python (price ratio)
+6-month price momentum from PX_LAST
+beta
+NUMERIC(8,4)
+Bloomberg (static CSV)
+BETA_RAW_OVERRIDABLE
+mkt_cap_log
+NUMERIC(12,4)
+Bloomberg (static CSV)
+Log(CUR_MKT_CAP)
+sector
+VARCHAR(50)
+Bloomberg (static CSV)
+GICS_SECTOR_NAME
+div_yield
+NUMERIC(8,4)
+Bloomberg (static CSV)
+DVD_YLD_IND
+vix
+NUMERIC(8,4)
+Bloomberg (macro CSV)
+VIX Index daily level
+yield_10y
+NUMERIC(8,4)
+Bloomberg (macro CSV)
+USGG10YR 10-year yield
+—
+—
+UNIQUE (ticker, date)
+Prevents duplicate feature rows on re-run
+
+Table 3: predictions
+Ensemble output. UNIQUE constraint on (ticker, forecast_date) prevents duplicate predictions from rolling-window re-runs corrupting backtest results.
+Column
+Type
+Constraints
+Purpose
+id
+SERIAL
+PRIMARY KEY
+Unique row ID
+ticker
+VARCHAR(20)
+NOT NULL
+Asset ticker
+forecast_date
+DATE
+NOT NULL
+Date prediction was made (end of training window)
+target_date
+DATE
+NOT NULL
+forecast_date + 30 trading days
+lstm_pred
+NUMERIC(10,6)
+
+LSTM predicted 30-day return
+xgb_pred
+NUMERIC(10,6)
+
+XGBoost predicted 30-day return
+ensemble_pred
+NUMERIC(10,6)
+
+0.5 * lstm_pred + 0.5 * xgb_pred
+actual_return
+NUMERIC(10,6)
+
+Actual 30-day return (filled post-facto when target_date passes)
+directional_correct
+BOOLEAN
+
+sign(ensemble_pred) == sign(actual_return). Zero returns treated as non-directional and excluded from accuracy denominator.
+—
+—
+UNIQUE (ticker, forecast_date)
+Prevents duplicate predictions on re-run
+
+Table 4: portfolios
+Optimizer output: asset weights for each point on the Efficient Frontier.
+Column
+Type
+Constraints
+Purpose
+id
+SERIAL
+PRIMARY KEY
+Unique row ID
+run_id
+VARCHAR(50)
+NOT NULL
+Optimization run identifier
+ticker
+VARCHAR(20)
+NOT NULL
+Asset ticker
+weight
+NUMERIC(8,6)
+NOT NULL
+Optimal portfolio weight (0-1)
+target_return
+NUMERIC(8,6)
+
+Target return constraint used
+portfolio_vol
+NUMERIC(8,6)
+
+Resulting portfolio volatility
+sharpe_ratio
+NUMERIC(8,4)
+
+Risk-adjusted return
+created_at
+TIMESTAMP
+DEFAULT NOW()
+Optimization timestamp
+
+Table 5: risk_metrics
+Risk decomposition per optimization run: VaR, max drawdown, Sharpe, per-asset contribution.
+Column
+Type
+Constraints
+Purpose
+id
+SERIAL
+PRIMARY KEY
+Unique row ID
+run_id
+VARCHAR(50)
+NOT NULL
+Links to portfolios table
+metric_name
+VARCHAR(50)
+NOT NULL
+e.g. VaR_95, max_drawdown, sharpe
+metric_value
+NUMERIC(12,6)
+NOT NULL
+Metric value
+ticker
+VARCHAR(20)
+
+NULL for portfolio-level, ticker for asset-level
+created_at
+TIMESTAMP
+DEFAULT NOW()
+Computation timestamp
+
+7. Streamlit Cloud Deployment
+App Structure
+Multi-page Streamlit app deployed on Streamlit Cloud (free tier) with public URL
+All charts built with Plotly — interactive, zoom-able, hover-enabled
+PostgreSQL connection via st.secrets for credentials (never hardcode in repo)
+
+Required Pages and Visualizations
+Page / Visual
+Content + Data Source
+Home / Dashboard
+Portfolio summary: current weights donut chart, total return vs benchmark (SPY), Sharpe ratio KPI cards. Source: portfolios + risk_metrics tables.
+Efficient Frontier
+Interactive Efficient Frontier scatter plot (risk vs return). Plotly with hover showing weights, Sharpe, volatility per point. Source: portfolios table.
+Return Predictions
+Bar chart: ensemble predicted return vs actual return per asset. Color-coded directional accuracy. Source: predictions table.
+Model Performance
+Rolling directional accuracy over time (line chart). LSTM vs XGBoost vs Ensemble comparison. Source: predictions table.
+Risk Decomposition
+Asset-level VaR contribution bar chart. Max drawdown timeline. Source: risk_metrics table.
+
+8. Tableau Static Report
+Purpose and Separation
+Streamlit = interactive live demo for interviews and portfolio. Tableau = polished static report for recruiter-facing presentation. These serve different audiences and are not redundant.
+
+Tableau Report Contents (3 Dashboards Minimum)
+Dashboard 1 — Portfolio Analytics: Efficient Frontier visualization, optimal portfolio weights, risk-return summary table
+Dashboard 2 — Model Performance: LSTM vs XGBoost return prediction accuracy, rolling directional accuracy, R² over time
+Dashboard 3 — Risk Report: VaR breakdown by asset, sector exposure heatmap, Sharpe ratio vs benchmark comparison
+
+Data Connection
+Connect Tableau to PostgreSQL directly via ODBC/native connector (Tableau Desktop supports PostgreSQL natively)
+Publish to Tableau Public (free) for shareable link — or export as PDF and commit to repo
+
+9. Build Phases & Timeline
+Phase
+Task
+Tools
+Hrs
+Output
+Pre-Build
+GitHub repo, folder structure, requirements.txt, config.py, PostgreSQL schema
+Cursor + Claude
+3
+Repo scaffold, DB live
+Phase 1
+Bloomberg BQL data pull + CSV → PostgreSQL ingestion (pipeline/ingest.py)
+Cursor + Claude
+10
+prices_raw + features tables populated
+Phase 2
+Technical indicator computation + feature engineering (pipeline/features.py)
+Cursor + Claude
+8
+features table complete, all columns filled
+Phase 3
+LSTM model build + rolling-window training (models/lstm.py)
+Cursor Pro + Claude
+18
+LSTM predictions in predictions table
+Phase 4
+XGBoost model build + rolling-window training (models/xgboost_model.py)
+Cursor Pro + Claude
+10
+XGBoost predictions in predictions table
+Phase 5
+Ensemble + evaluation (models/ensemble.py)
+Cursor + Claude
+6
+ensemble_pred column filled, directional accuracy logged
+Phase 6
+MPT optimizer: Efficient Frontier + risk metrics (optimizer/portfolio.py)
+Cursor + Claude
+10
+portfolios + risk_metrics tables populated
+Phase 7
+Streamlit app + Plotly visualizations (app/)
+Cursor + Gemini
+10
+Live Streamlit Cloud URL with 5 visuals
+Phase 8
+Tableau report — 3 dashboards
+ChatGPT + self
+8
+Tableau Public link or PDF in repo
+Phase 9
+Tests, README, GitHub polish, portfolio embed
+Cursor + Claude
+5
+v1.0 tagged, demo links live
+
+Total: ~88 hrs  |  85-90 hour range justified by LSTM complexity + Tableau + deployment. Phase 3 is highest-risk — allocate most time here. Do not understate.
+
+10. AI Tool Delegation
+Tool
+Role in RiskFecta
+When to Use
+Cursor Pro
+Primary coding environment — all file creation, editing, multi-file context
+Every session
+Claude Pro (Sonnet 4.6)
+PyTorch LSTM architecture review, rolling-window validation correctness, PostgreSQL schema, optimizer logic, resume bullets
+ML correctness + architecture decisions
+ChatGPT Plus (5.2)
+Tableau dashboard design, calculated fields, layout guidance
+Phase 8 — entire Tableau build
+Gemini 3.0 Pro
+Streamlit layout scaffolding, Plotly chart boilerplate, fast UI code
+Phase 7 — Streamlit + Plotly scaffolding
+
+11. Target Resume Bullets (Post-Build)
+Replace bracketed placeholders with actual measured values. Never claim a metric you cannot reproduce.
+
+Developed hybrid forecasting engine combining LSTM (PyTorch) and XGBoost for 30-day asset return prediction, achieving [X]% directional accuracy with rolling-window cross-validation
+Implemented Modern Portfolio Theory optimization using SciPy to compute Efficient Frontier allocations across 40+ assets, optimizing risk-adjusted returns via ensemble ML expected return inputs
+Sourced institutional-grade price and factor data using Bloomberg Terminal BQL and Excel API for 40+ S&P 500 constituents, ingesting into PostgreSQL for end-to-end quant pipeline
+Deployed quantitative portfolio analytics platform on Streamlit Cloud with interactive Plotly visualizations and Tableau professional reporting for recruiter-facing presentation
+
+12. Risks & Mitigations
+Risk
+Mitigation
+LSTM training too slow on laptop CPU
+Use Google Colab (free GPU) for training. Save model weights (.pt file) locally. Inference runs on CPU fine.
+LSTM directional accuracy below 55%
+This is expected — financial return prediction is hard. Document honestly. Focus on Sharpe ratio improvement vs benchmark, not raw prediction accuracy.
+XGBoost R² very low
+Expected for return prediction. Use directional accuracy as primary metric. Tune with GridSearchCV if needed.
+Rolling window leakage
+Paste loop to Claude Pro for explicit leakage audit before training begins. Do not assume Cursor's code is leak-free.
+Bloomberg data pull hits quota
+Use BQL (more quota-efficient than BDH/BDP). Do one large pull per data type, not incremental calls. Save all CSVs locally after pull.
+PostgreSQL connection on Streamlit Cloud
+Use st.secrets for DB credentials. Deployment DB provider: Supabase (default) or Neon — both offer free hosted PostgreSQL, same schema, one-line connection string change. Do not hardcode vendor in code.
+Tableau Public file too large
+Export individual dashboard views as PDFs, commit to repo/docs folder. Link from README.
+Scope overrun on LSTM (Phase 3)
+Fallback: simplify LSTM to single-layer, reduce sequence length to 30 days. Ship working model over architecturally perfect one.
+Portfolio optimization fails to converge
+Add explicit bounds (each weight 0-0.20 max), check covariance matrix is positive definite before passing to optimizer.
+
+RiskFecta PRD v1  |  Kapil Iyer  |  University of Waterloo  |  2026

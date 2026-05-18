@@ -1,0 +1,13 @@
+# RiskFecta — top-level deps only (PRD/Build Plan). Let pip resolve; then pip freeze and trim to this list.
+# Use Python 3.10–3.13 (pandas-ta does not support 3.14 yet). Recommended: venv with 3.12.
+torch>=2.0
+xgboost>=2.0
+scikit-learn>=1.3
+psycopg2-binary>=2.9
+pandas>=2.0
+numpy>=1.24
+scipy>=1.10
+plotly>=5.18
+streamlit>=1.31
+pandas-ta>=0.3.14b
+python-dotenv>=1.0
