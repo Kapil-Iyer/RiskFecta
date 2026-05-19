@@ -86,7 +86,8 @@ flowchart LR
 | `schema.sql` (5 tables: prices, features, predictions, portfolios, risk_metrics) | Done |
 | `docs/SETUP.md`, `docs/Bloomberg_export_spec.md` | Done |
 | Local PostgreSQL + `.env` | **Your machine** — see [docs/SETUP.md](docs/SETUP.md) |
-| Bloomberg CSV pull + ingestion | Planned — Phase 1 |
+| Bloomberg CSV data pull| Done |
+| Bloomberg CSV ingestion | Planned|
 | Feature engineering, ML, optimizer, UI | Planned — Phases 2–8 |
 
 **MVP-A** (minimum viable product) is complete when: real Bloomberg data is ingested; rolling-window LSTM and XGBoost run without leakage; ensemble and Efficient Frontier are computed; Streamlit Cloud demo runs on that data. See `PRD_and_buildplan/Phase0_Plan.md` for criteria.
