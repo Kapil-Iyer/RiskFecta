@@ -25,7 +25,11 @@ _skip_no_db = pytest.mark.skipif(
     reason="DATABASE_URL not set in the environment (expected in CI / clean checkouts)",
 )
 
-FUTURE_PHASE_TABLES = ["features", "predictions", "portfolios", "risk_metrics"]
+# Still-empty downstream research tables the Phase 2A API must never touch.
+# `features` is intentionally omitted: Phase 3 legitimately populates it; the
+# API invariant for that table is "row count unchanged across API calls"
+# (see test_future_phase_tables_remain_empty_after_api_use).
+EMPTY_DOWNSTREAM_TABLES = ["predictions", "portfolios", "risk_metrics"]
 EXPECTED_ROW_COUNT = 62_800  # 50 tickers x 1256 valid sessions each (Phase 1A audit)
 
 
@@ -95,7 +99,19 @@ def test_market_summary_matches_known_totals(client):
 
 @_skip_no_db
 def test_future_phase_tables_remain_empty_after_api_use(client):
-    """Hitting every Phase 2A endpoint must never write to a future-phase table."""
+    """Phase 2A read-only API must not mutate later-phase research tables.
+
+    `features` may already be populated by Phase 3 — assert its row count is
+    unchanged across the API calls rather than hard-coding emptiness or a
+    fixed size. Still-unused tables (predictions/portfolios/risk_metrics)
+    must remain empty.
+    """
+    conn = db.get_connection()
+    try:
+        features_before = db.fetch_scalar(conn, "SELECT COUNT(*) FROM features")
+    finally:
+        conn.close()
+
     client.get("/health")
     client.get("/health/ready")
     client.get("/api/universe")
@@ -105,7 +121,12 @@ def test_future_phase_tables_remain_empty_after_api_use(client):
 
     conn = db.get_connection()
     try:
-        for table in FUTURE_PHASE_TABLES:
+        features_after = db.fetch_scalar(conn, "SELECT COUNT(*) FROM features")
+        assert features_after == features_before, (
+            f"features row count changed across Phase 2A API use "
+            f"({features_before} -> {features_after})"
+        )
+        for table in EMPTY_DOWNSTREAM_TABLES:
             n = db.fetch_scalar(conn, f"SELECT COUNT(*) FROM {table}")
             assert n == 0, f"{table} is not empty after Phase 2A API use"
     finally:

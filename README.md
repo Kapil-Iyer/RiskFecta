@@ -8,7 +8,7 @@ RiskFecta is **not** a live trading or order-execution system, and it is **not i
 
 > **Authoritative specification:** [`PRD.md`](PRD.md) (product), [`TRD.md`](TRD.md) (architecture), [`ML_SPEC.md`](ML_SPEC.md) (ML/quant methodology), [`BUILD_PLAN.md`](BUILD_PLAN.md) (execution sequencing). These four documents govern RiskFecta V2 and supersede everything in `PRD_and_buildplan/archive/` (V1 — historical reference only; see [PRD.md § V1 Archive / Supersession](PRD.md#v1-archive--supersession)).
 
-> **Status:** Phase 1 (Data Foundation) complete. Bloomberg CSV data pull is **done**; `prices_raw` is validated, normalized, and ingested into Supabase-hosted PostgreSQL (62,800 rows — exact 50-stock universe, 1,256 valid trading sessions per ticker). Macro (`SPX`/`VIX`/`USGG10YR`) and static snapshot fields (market cap, beta, dividend yield, sector) are validated and normalized but intentionally **not** persisted as their own database tables in Phase 1 — the frozen 5-table schema has no raw destination for them; see [BUILD_PLAN.md](BUILD_PLAN.md) Phase 1's Macro / Static Persistence Note. **Phase 2A (FastAPI backend)** and **Phase 2B (React + TypeScript + Plotly frontend)** are implemented, and **Phase 2C (production deployment + frontend polish) is live**:
+> **Status:** Phase 1 (Data Foundation) complete. Bloomberg CSV data pull is **done**; `prices_raw` is validated, normalized, and ingested into Supabase-hosted PostgreSQL (62,800 rows — exact 50-stock universe, 1,256 valid trading sessions per ticker). Macro (`SPX`/`VIX`/`USGG10YR`) and static snapshot fields (market cap, beta, dividend yield, sector) are validated and normalized but intentionally **not** persisted as their own database tables in Phase 1 — the frozen 5-table schema has no raw destination for them; see [BUILD_PLAN.md](BUILD_PLAN.md) Phase 1's Macro / Static Persistence Note. **Phase 2A (FastAPI backend)** and **Phase 2B (React + TypeScript + Plotly frontend)** are implemented, and **Phase 2C (production deployment + frontend polish) is live**. **Phase 3 implementation and real-data execution complete; pending final independent verification** — the leakage-safe technical/macro feature pipeline has been run against the real Bloomberg-sourced data and `features` is now populated (62,800 rows, one per valid `(ticker, date)` session, momentum/target methodology per "Phase 3 methodology decisions (locked)" below). **No model has been trained, no forecast produced, and no portfolio optimized — Phase 4 has not started.**
 >
 > - **Frontend:** <https://riskfecta.vercel.app>
 > - **API:** <https://riskfecta-api.onrender.com> (interactive docs at `/docs`)
@@ -99,7 +99,8 @@ flowchart LR
 | FastAPI backend skeleton (`app/`) — `/health`, `/api/universe`, `/api/prices/{ticker}`, `/api/market/summary` | **Done** (Phase 2A) — read-only, real DB data, no fabricated results |
 | React + TypeScript + Plotly frontend (`frontend/`) — market summary, universe browser, price/volume charts | **Done** (Phase 2B) — consumes the real Phase 2A API, no fabricated results |
 | Dark-theme frontend polish, company-name metadata, sector accent theming, production deployment | **Done** (Phase 2C) — live at <https://riskfecta.vercel.app> |
-| Feature engineering, ML models, optimizer | **Planned** — Phases 3–7 |
+| Feature + target pipeline (`pipeline/features.py`, `pipeline/targets.py`) | **Done** (Phase 3) — real-data execution complete, pending final independent verification; `features` populated (62,800 rows) |
+| ML models, optimizer | **Planned** — Phases 4–7 |
 
 No model has been trained, no forecast has been produced, and no portfolio has been optimized. Nothing in this repository presents a fabricated or illustrative result as real.
 
@@ -114,7 +115,7 @@ Aligned with the locked [`BUILD_PLAN.md`](BUILD_PLAN.md):
 | **2A** | FastAPI backend skeleton | Complete — read-only endpoints over the real Phase 1 database |
 | **2B** | React + TypeScript + Plotly frontend | Complete — local dashboard consuming the real Phase 2A API |
 | **2C** | Frontend polish + production deployment | Complete — live at <https://riskfecta.vercel.app>, showing real dataset coverage only — no fabricated results |
-| **3** | Feature + target pipeline | Leakage-safe features; 21-session TRI targets |
+| **3** | Feature + target pipeline | Real-data execution complete, pending final independent verification — `features` populated (62,800 rows); leakage-safe features; 21-session TRI targets (derived for validation, not persisted) |
 | **4** | Baselines + XGBoost | Walk-forward OOS forecasts, pooled XGBoost |
 | **5** | LSTM | Walk-forward OOS forecasts, pooled LSTM |
 | **6** | Walk-forward comparison + ensemble | Model comparison evidence; 50/50 ensemble |
@@ -124,6 +125,17 @@ Aligned with the locked [`BUILD_PLAN.md`](BUILD_PLAN.md):
 | **10** | Hardening + release | Full tests, CI/CD audit, final README, honest resume metrics |
 
 Every Integrity Audit gate, stop/gate criterion, and phase acceptance criterion is defined in [`BUILD_PLAN.md`](BUILD_PLAN.md).
+
+### Phase 3 methodology decisions (locked)
+
+[`ML_SPEC.md`](ML_SPEC.md) intentionally leaves several Phase 3 implementation details as explicit decision gates rather than fabricating them. These have now been resolved by the user, conditionally passed by an independent Cursor Integrity Audit, and are locked for all later phases (`pipeline/features.py`, `config.py`):
+
+- **Momentum lookbacks** — `config.MOMENTUM_3M_SESSIONS = 63`, `config.MOMENTUM_6M_SESSIONS = 126` (the standard ~21-trading-sessions/month approximation for ML_SPEC.md §6/§15's "3-month, 6-month equivalent in trading sessions"). Defined only in `config.py`; never hardcoded independently in feature functions.
+- **Macro forward-fill horizon** — exact-date alignment only (no forward-fill, no backward-fill, no interpolation). ML_SPEC.md §5 flags the maximum fill-forward horizon as an unresolved decision gate; the locked MVP policy is the conservative one — a macro value not quoted exactly on a stock's valid session date is left NULL.
+- **SPX persistence** — `pipeline/features.py:compute_spx_return()` implements date-safe SPX level/return as an in-memory-only capability. ML_SPEC.md §6 names SPX in the macro feature family, but `schema.sql` has no `spx`/`spx_return` column and neither `config.XGBOOST_FEATURE_COLS` nor `config.LSTM_FEATURE_COLS` requires one — SPX is not persisted to `features` and not part of any current model's input list.
+- **RSI(14) / MACD(12,26,9) / Bollinger(20, ±2σ) / volatility(20d) conventions** — Wilder-style recursive EWM (RSI) and pure-recursive EMA with `adjust=False` (MACD), no SMA seed; sample stdev (`ddof=1`) for Bollinger/volatility; volatility on daily simple close returns, not annualized. See `pipeline/features.py` docstrings for the full rationale.
+
+Any future change to these locked conventions requires an explicit, separately-approved methodology revision — not a silent code change.
 
 ---
 

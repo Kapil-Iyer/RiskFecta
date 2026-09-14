@@ -29,6 +29,19 @@ LSTM_SEQ = 60        # input sequence length (trading sessions)
 FORECAST_HORIZON = 21  # 21-session forward return target
 
 # ---------------------------------------------------------------------------
+# Momentum lookbacks (Phase 3 decision gate — LOCKED)
+# ML_SPEC.md §6/§15 name "momentum (3-month, 6-month equivalent in trading
+# sessions)" without freezing an exact session count. This project adopts
+# the standard ~21-trading-sessions-per-month approximation (3m -> 63,
+# 6m -> 126) as the RiskFecta V2 Phase 3 methodology, locked here as the
+# single source of truth — never hardcoded independently inside
+# pipeline/features.py. Fixed for all later phases unless a future,
+# explicitly approved methodology revision changes it.
+# ---------------------------------------------------------------------------
+MOMENTUM_3M_SESSIONS = 63
+MOMENTUM_6M_SESSIONS = 126
+
+# ---------------------------------------------------------------------------
 # Ticker universe: exact 50 symbols from Bloomberg data/raw export
 # (25 Information Technology + 25 Financials). Source of truth = CSVs, not hand list.
 # ---------------------------------------------------------------------------
