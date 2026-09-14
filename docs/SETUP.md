@@ -1,71 +1,37 @@
-# RiskFecta — Environment setup
+# RiskFecta — Environment setup (V2 baseline)
+
+Full V2 deployment documentation will be rewritten with the specification package.
+This file covers local Python setup and how the app expects PostgreSQL.
 
 ## Python
 
-Use **Python 3.10–3.13** (pandas-ta does not support 3.14). You have 3.13; use it.
-
-## Commands (PowerShell, run from project root)
+Use **Python 3.10–3.13** (pandas-ta does not support 3.14).
 
 ```powershell
 cd c:\Users\kapil\RiskFecta
 
-# Create venv with Python 3.13 (py launcher)
 py -3.13 -m venv venv
-
-# Activate venv
 .\venv\Scripts\Activate.ps1
-
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-If you don’t have the `py` launcher, use the full path to Python 3.13, e.g.:
+## Database (PostgreSQL via Supabase)
 
-```powershell
-& "C:\Path\To\Python313\python.exe" -m venv venv
-```
+RiskFecta V2 uses **PostgreSQL hosted through Supabase** (managed Postgres).
+Application code should use a standard `DATABASE_URL` — not Supabase Auth/Storage APIs.
 
-## PostgreSQL (Windows)
+1. Create a Supabase project and obtain the Postgres connection URI.
+2. Apply `schema.sql` to that database (SQL editor or `psql` against the URI).
+3. Copy `.env.example` → `.env` and set `DATABASE_URL` to your URI (never commit `.env`).
 
-If `createdb` or `psql` are not recognized, either:
+A locally installed PostgreSQL server is **not** the V2 default architecture.
 
-**Option A — Add PostgreSQL to PATH**
-
-1. Find the PostgreSQL `bin` folder (default for v18: `C:\Program Files\PostgreSQL\18\bin`).
-2. Add it to your user PATH, or run in PowerShell (use 18 if that’s your version):
-
-```powershell
-$env:Path += ";C:\Program Files\PostgreSQL\18\bin"
-createdb -U postgres riskfecta
-psql -U postgres -d riskfecta -f schema.sql
-psql -U postgres -d riskfecta -c "\dt"
-```
-
-**Option B — Use full path to psql**
-
-```powershell
-& "C:\Program Files\PostgreSQL\18\bin\psql.exe" -U postgres -c "CREATE DATABASE riskfecta;"
-& "C:\Program Files\PostgreSQL\18\bin\psql.exe" -U postgres -d riskfecta -f schema.sql
-```
-
-**Option C — pgAdmin**
-
-Create database `riskfecta`, then open Query Tool and run the contents of `schema.sql`.
-
----
-
-## .env file
-
-Create a file named `.env` in the project root (same folder as `config.py`) with:
-
-```
-DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/riskfecta
-```
-
-Replace `YOUR_PASSWORD` with your PostgreSQL password. The app loads `.env` via python-dotenv; do not commit `.env`.
-
-**Test (with venv active):**
+**Test (venv active):**
 
 ```powershell
 python -c "from config import get_database_url; print(get_database_url())"
 ```
+
+## Note
+
+Raw Bloomberg CSVs live under `data/raw/` (gitignored). Do not modify them.

@@ -1,5 +1,7 @@
 # RiskFecta
 
+> **V1 archive notice:** Much of this README still describes the archived V1 plan (e.g. 30-day horizon, Streamlit, Tableau). It is **not** authoritative for RiskFecta V2. Active baseline: `config.py`, `schema.sql`, `requirements.txt`, `.env.example`, `docs/SETUP.md`. A coherent V2 docs rewrite is forthcoming.
+
 **Quantitative Portfolio Intelligence Platform**
 
 RiskFecta is a Python-based portfolio analytics system that combines machine-learning return forecasting with Modern Portfolio Theory optimization. It ingests institutional-grade market data from Bloomberg Terminal, trains a hybrid **LSTM + XGBoost** ensemble to predict 30-day forward returns, and feeds those signals into a **SciPy Efficient Frontier** optimizer—then surfaces results through an interactive **Streamlit** demo and a professional **Tableau** report.

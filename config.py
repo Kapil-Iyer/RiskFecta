@@ -1,5 +1,5 @@
 """
-RiskFecta configuration — PRD v1.0 / Build Plan v1.0.
+RiskFecta configuration — V2 baseline (horizon/universe locked to Bloomberg export).
 Ticker universe, feature lists, rolling-window constants, paths.
 """
 
@@ -21,25 +21,26 @@ DATA_RAW = PROJECT_ROOT / "data" / "raw"
 MODELS_DIR = PROJECT_ROOT / "models"
 
 # ---------------------------------------------------------------------------
-# Rolling-window constants (locked — do not change without PRD amendment)
+# Rolling-window constants (locked V2 — trading SESSIONS, not calendar rows)
 # ---------------------------------------------------------------------------
-TRAIN_WINDOW = 252   # trading days (~1 year)
-STEP = 21            # trading days (~1 month)
-LSTM_SEQ = 60        # input sequence length (days)
-FORECAST_HORIZON = 30  # 30-day forward return target
+TRAIN_WINDOW = 252   # trading sessions (~1 year)
+STEP = 21            # trading sessions (~1 month rebalance)
+LSTM_SEQ = 60        # input sequence length (trading sessions)
+FORECAST_HORIZON = 21  # 21-session forward return target
 
 # ---------------------------------------------------------------------------
-# Ticker universe: 40–50 S&P 500, Technology + Financial Services (placeholder).
-# Replace with actual Bloomberg tickers after Phase 1 pull if needed.
+# Ticker universe: exact 50 symbols from Bloomberg data/raw export
+# (25 Information Technology + 25 Financials). Source of truth = CSVs, not hand list.
 # ---------------------------------------------------------------------------
 TICKER_UNIVERSE = [
-    # Technology (representative)
-    "AAPL", "MSFT", "GOOGL", "GOOG", "META", "NVDA", "AVGO", "ORCL", "ADBE", "CRM",
-    "CSCO", "ACN", "AMD", "INTC", "IBM", "QCOM", "TXN", "NOW", "INTU", "AMAT",
-    "MU", "LRCX", "KLAC", "SNPS", "CDNS", "ADSK", "PANW", "CRWD", "FTNT", "WDAY",
-    # Financial Services (representative)
-    "JPM", "BAC", "WFC", "GS", "MS", "C", "BLK", "SCHW", "AXP", "SPGI",
-    "MMC", "CB", "PGR", "MET", "AON", "ICE", "CME", "CBOE", "FIS", "FISV",
+    # Information Technology (Bloomberg export order)
+    "AAPL", "MSFT", "NVDA", "AVGO", "ORCL", "CRM", "ADBE", "AMD", "QCOM", "TXN",
+    "INTC", "MU", "AMAT", "KLAC", "SNPS", "CDNS", "PANW", "NOW", "APH", "MSI",
+    "ADI", "MRVL", "IBM", "HPQ", "GLW",
+    # Financials (Bloomberg export order; MRSH as exported — not MMC)
+    "JPM", "BAC", "WFC", "GS", "MS", "C", "BLK", "SCHW", "AXP", "USB",
+    "PNC", "TFC", "COF", "MRSH", "ICE", "CME", "SPGI", "MCO", "MSCI", "CB",
+    "PGR", "MET", "AIG", "TRV", "AJG",
 ]
 
 # ---------------------------------------------------------------------------

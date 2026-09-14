@@ -1,3 +1,8 @@
+*** V1 ARCHIVE NOTICE ***
+This extracted PRD describes archived RiskFecta V1 architecture (e.g. 30-day
+horizon, Streamlit, Tableau). It is NOT authoritative for RiskFecta V2.
+Active baseline: config.py, schema.sql, requirements.txt, docs/SETUP.md.
+
 RiskFecta
 Quantitative Portfolio Intelligence Platform
 Product Requirements Document  |  v1.0  |  February 2026

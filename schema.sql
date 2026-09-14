@@ -1,6 +1,11 @@
 -- RiskFecta PostgreSQL Schema (5 tables)
--- PRD v1.0 / Build Plan v1.0 — run_id is logical key only (no FK).
--- Risk-free rate for Sharpe ratio: USGG10YR / 252 (daily). No T-bill.
+-- run_id is logical/application key only (no FK). No optimization_runs table.
+-- Risk-free rate (Sharpe): normalize annual Bloomberg USGG10YR yield to decimal
+-- return units first, then convert to a per-trading-session rate (typically / 252).
+-- Do not treat the raw index quote as already a daily return. No T-bill.
+-- prices_raw.close is NOT NULL: only insert valid trading observations (gate on
+-- PX_LAST/close). Do NOT use TOTAL_RETURN_INDEX to decide session validity —
+-- it may remain populated on weekend/holiday calendar rows.
 
 -- ---------------------------------------------------------------------------
 -- Table 1: prices_raw — Bloomberg BQL price export. Immutable after load.

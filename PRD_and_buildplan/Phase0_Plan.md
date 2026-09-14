@@ -1,5 +1,7 @@
 # RiskFecta — Phase 0 Plan (Pre-Build)
 
+> **V1 archive notice:** This document describes the archived V1 pre-build plan (including 30-day horizon and Streamlit/Tableau assumptions). It is **not** authoritative for RiskFecta V2. See current `config.py` / `schema.sql` / `docs/SETUP.md` for the V2 baseline until the new specification package is approved.
+
 **Status:** Planning only — no code until you approve.  
 **Phase:** 0 — Pre-Build Environment Setup  
 **Estimate:** ~3 hrs  

@@ -1,3 +1,8 @@
+*** V1 ARCHIVE NOTICE ***
+This extracted Build Plan describes archived RiskFecta V1 phases (Streamlit,
+Tableau, FORECAST_HORIZON=30, etc.). It is NOT authoritative for RiskFecta V2.
+Active baseline: config.py, schema.sql, requirements.txt, docs/SETUP.md.
+
 RiskFecta
 Complete Build Plan — Scratch to Deployment
 v1.0  |  February 2026  |  PRD v4 locked  |  85-90 hrs  |  LSTM gets 20% buffer
