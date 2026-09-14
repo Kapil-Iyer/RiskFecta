@@ -8,7 +8,7 @@ RiskFecta is **not** a live trading or order-execution system, and it is **not i
 
 > **Authoritative specification:** [`PRD.md`](PRD.md) (product), [`TRD.md`](TRD.md) (architecture), [`ML_SPEC.md`](ML_SPEC.md) (ML/quant methodology), [`BUILD_PLAN.md`](BUILD_PLAN.md) (execution sequencing). These four documents govern RiskFecta V2 and supersede everything in `PRD_and_buildplan/archive/` (V1 — historical reference only; see [PRD.md § V1 Archive / Supersession](PRD.md#v1-archive--supersession)).
 
-> **Status:** Phase 1 (Data Foundation) complete. Bloomberg CSV data pull is **done**; `prices_raw` is validated, normalized, and ingested into Supabase-hosted PostgreSQL (62,800 rows — exact 50-stock universe, 1,256 valid trading sessions per ticker). Macro (`SPX`/`VIX`/`USGG10YR`) and static snapshot fields (market cap, beta, dividend yield, sector) are validated and normalized but intentionally **not** persisted as their own database tables in Phase 1 — the frozen 5-table schema has no raw destination for them; see [BUILD_PLAN.md](BUILD_PLAN.md) Phase 1's Macro / Static Persistence Note. **Phase 2A (FastAPI backend skeleton) is implemented**: read-only endpoints over the real Phase 1 database (see [Running the API locally](#running-the-api-locally)). The React/TypeScript frontend (Phase 2B) and deployment (Phase 2B/2C) have **not** been started, and no model, optimizer, forecast, or portfolio code exists yet — see [Current state vs. roadmap](#current-state-vs-roadmap). **No forecasts, backtests, or portfolio results exist yet, and none are presented as real anywhere in this repository.**
+> **Status:** Phase 1 (Data Foundation) complete. Bloomberg CSV data pull is **done**; `prices_raw` is validated, normalized, and ingested into Supabase-hosted PostgreSQL (62,800 rows — exact 50-stock universe, 1,256 valid trading sessions per ticker). Macro (`SPX`/`VIX`/`USGG10YR`) and static snapshot fields (market cap, beta, dividend yield, sector) are validated and normalized but intentionally **not** persisted as their own database tables in Phase 1 — the frozen 5-table schema has no raw destination for them; see [BUILD_PLAN.md](BUILD_PLAN.md) Phase 1's Macro / Static Persistence Note. **Phase 2A (FastAPI backend skeleton) is implemented**: read-only endpoints over the real Phase 1 database (see [Running the API locally](#running-the-api-locally)). **Phase 2B (React + TypeScript + Plotly frontend) is implemented**: a local dashboard consuming that API — real market coverage, universe browser, and historical price/volume charts, with build status honestly marked "planned" where models/portfolios don't exist yet (see [Running the frontend locally](#running-the-frontend-locally)). Deployment (Phase 2C) has **not** been started, and no model, optimizer, forecast, or portfolio code exists yet — see [Current state vs. roadmap](#current-state-vs-roadmap). **No forecasts, backtests, or portfolio results exist yet, and none are presented as real anywhere in this repository.**
 
 ---
 
@@ -92,8 +92,9 @@ flowchart LR
 | `prices_raw` validation, normalization, and PostgreSQL ingestion (Phase 1A/1B/1C) | **Done** — 62,800 rows, exact 50-stock universe |
 | Macro/static validation + normalization (in-memory; not persisted — see Phase 1 note) | **Done** |
 | FastAPI backend skeleton (`app/`) — `/health`, `/api/universe`, `/api/prices/{ticker}`, `/api/market/summary` | **Done** (Phase 2A) — read-only, real DB data, no fabricated results |
+| React + TypeScript + Plotly frontend (`frontend/`) — market summary, universe browser, price/volume charts | **Done** (Phase 2B) — consumes the real Phase 2A API, no fabricated results |
 | Feature engineering, ML models, optimizer | **Planned** — Phases 3–7 |
-| React/TypeScript frontend, deployment | **Planned** — Phase 2B/2C |
+| Deployment (public URL) | **Planned** — Phase 2C |
 
 No model has been trained, no forecast has been produced, and no portfolio has been optimized. Nothing in this repository presents a fabricated or illustrative result as real.
 
@@ -106,7 +107,8 @@ Aligned with the locked [`BUILD_PLAN.md`](BUILD_PLAN.md):
 | **0 — Specification** | PRD, TRD, ML Spec, Build Plan; V1 archive; config/schema alignment | Complete |
 | **1** | Bloomberg validation + ingestion | Complete — `prices_raw` populated (62,800 rows); exact 50-stock universe verified |
 | **2A** | FastAPI backend skeleton | Complete — read-only endpoints over the real Phase 1 database |
-| **2B/2C** | React/TypeScript frontend + first deployment | **Next** — public URL showing real dataset coverage only — no fabricated results |
+| **2B** | React + TypeScript + Plotly frontend | Complete — local dashboard consuming the real Phase 2A API |
+| **2C** | First deployment | **Next** — public URL showing real dataset coverage only — no fabricated results |
 | **3** | Feature + target pipeline | Leakage-safe features; 21-session TRI targets |
 | **4** | Baselines + XGBoost | Walk-forward OOS forecasts, pooled XGBoost |
 | **5** | LSTM | Walk-forward OOS forecasts, pooled LSTM |
@@ -141,6 +143,7 @@ Every Integrity Audit gate, stop/gate criterion, and phase acceptance criterion 
 ```
 RiskFecta/
 ├── app/                       # FastAPI backend (Phase 2A skeleton: main.py, db.py, schemas.py, routes/)
+├── frontend/                  # React + TypeScript + Plotly frontend (Phase 2B: src/api, src/components)
 ├── pipeline/                  # ingest.py, features.py (Phases 1 & 3)
 ├── models/                    # baselines.py, xgboost_model.py, lstm.py, ensemble.py (Phases 4-6)
 ├── optimizer/                 # covariance.py, portfolio.py (Phase 7)
@@ -209,6 +212,46 @@ Environment variables:
 | `CORS_ORIGINS` | No | Comma-separated allowed origins for the future React frontend. Defaults to `http://localhost:3000,http://localhost:5173` (CRA/Vite dev servers). Set explicitly, never wildcarded, outside local development. |
 
 An API versioning prefix (e.g. `/api/v1/...`) is deferred, per [TRD.md](TRD.md) §10 — Phase 2A uses a plain `/api/...` prefix; introducing a version prefix later is a documented decision, not a silent breaking change.
+
+---
+
+## Running the frontend locally
+
+The Phase 2B frontend (`frontend/`) is a Vite + React + TypeScript app that consumes the Phase 2A API — it never queries PostgreSQL directly.
+
+1. Install dependencies:
+   ```powershell
+   cd frontend
+   npm install
+   ```
+2. (Optional) point it at a non-default backend URL — copy `.env.example` to `.env` and set:
+   ```
+   VITE_API_BASE_URL=http://127.0.0.1:8000
+   ```
+   If unset, it defaults to `http://127.0.0.1:8000` (the local `uvicorn` default from the section above).
+3. Run the backend (`uvicorn app.main:app --reload`, from the repo root) and the frontend together:
+   ```powershell
+   npm run dev
+   ```
+   Open `http://localhost:5173`.
+
+What it shows: RiskFecta branding, a build-status panel honestly marked "live" (historical data) vs. "planned" (forecasts, portfolio optimization), the real market summary and universe from the API, and a ticker detail view with Plotly close-price and volume charts plus date-range filtering — all sourced from `GET /api/*`, nothing fabricated.
+
+Other commands (run from `frontend/`):
+
+| Command | Purpose |
+|---------|---------|
+| `npm run build` | Type-check (`tsc -b`) + production build to `frontend/dist/` |
+| `npm test` | Run the Vitest suite |
+| `npm run lint` | Lint with oxlint |
+
+Environment variables:
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `VITE_API_BASE_URL` | No | Base URL of the FastAPI backend. Not a secret — safe to bake into the client bundle. Defaults to `http://127.0.0.1:8000`. |
+
+Make sure the backend's `CORS_ORIGINS` (see above) includes the frontend's dev origin — `http://localhost:5173` is already in its default.
 
 ---
 
