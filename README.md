@@ -8,7 +8,7 @@ RiskFecta is **not** a live trading or order-execution system, and it is **not i
 
 > **Authoritative specification:** [`PRD.md`](PRD.md) (product), [`TRD.md`](TRD.md) (architecture), [`ML_SPEC.md`](ML_SPEC.md) (ML/quant methodology), [`BUILD_PLAN.md`](BUILD_PLAN.md) (execution sequencing). These four documents govern RiskFecta V2 and supersede everything in `PRD_and_buildplan/archive/` (V1 — historical reference only; see [PRD.md § V1 Archive / Supersession](PRD.md#v1-archive--supersession)).
 
-> **Status:** Phase 1 (Data Foundation) complete. Bloomberg CSV data pull is **done**; `prices_raw` is validated, normalized, and ingested into Supabase-hosted PostgreSQL (62,800 rows — exact 50-stock universe, 1,256 valid trading sessions per ticker). Macro (`SPX`/`VIX`/`USGG10YR`) and static snapshot fields (market cap, beta, dividend yield, sector) are validated and normalized but intentionally **not** persisted as their own database tables in Phase 1 — the frozen 5-table schema has no raw destination for them; see [BUILD_PLAN.md](BUILD_PLAN.md) Phase 1's Macro / Static Persistence Note. No model, optimizer, or application code has been implemented yet — see [Current state vs. roadmap](#current-state-vs-roadmap). **No forecasts, backtests, or portfolio results exist yet, and none are presented as real anywhere in this repository.**
+> **Status:** Phase 1 (Data Foundation) complete. Bloomberg CSV data pull is **done**; `prices_raw` is validated, normalized, and ingested into Supabase-hosted PostgreSQL (62,800 rows — exact 50-stock universe, 1,256 valid trading sessions per ticker). Macro (`SPX`/`VIX`/`USGG10YR`) and static snapshot fields (market cap, beta, dividend yield, sector) are validated and normalized but intentionally **not** persisted as their own database tables in Phase 1 — the frozen 5-table schema has no raw destination for them; see [BUILD_PLAN.md](BUILD_PLAN.md) Phase 1's Macro / Static Persistence Note. **Phase 2A (FastAPI backend skeleton) is implemented**: read-only endpoints over the real Phase 1 database (see [Running the API locally](#running-the-api-locally)). The React/TypeScript frontend (Phase 2B) and deployment (Phase 2B/2C) have **not** been started, and no model, optimizer, forecast, or portfolio code exists yet — see [Current state vs. roadmap](#current-state-vs-roadmap). **No forecasts, backtests, or portfolio results exist yet, and none are presented as real anywhere in this repository.**
 
 ---
 
@@ -91,7 +91,9 @@ flowchart LR
 | Bloomberg CSV data pull | **Done** |
 | `prices_raw` validation, normalization, and PostgreSQL ingestion (Phase 1A/1B/1C) | **Done** — 62,800 rows, exact 50-stock universe |
 | Macro/static validation + normalization (in-memory; not persisted — see Phase 1 note) | **Done** |
-| Feature engineering, ML models, optimizer, FastAPI, React frontend | **Planned** — Phases 2–8 |
+| FastAPI backend skeleton (`app/`) — `/health`, `/api/universe`, `/api/prices/{ticker}`, `/api/market/summary` | **Done** (Phase 2A) — read-only, real DB data, no fabricated results |
+| Feature engineering, ML models, optimizer | **Planned** — Phases 3–7 |
+| React/TypeScript frontend, deployment | **Planned** — Phase 2B/2C |
 
 No model has been trained, no forecast has been produced, and no portfolio has been optimized. Nothing in this repository presents a fabricated or illustrative result as real.
 
@@ -103,7 +105,8 @@ Aligned with the locked [`BUILD_PLAN.md`](BUILD_PLAN.md):
 |-------|--------|------------|
 | **0 — Specification** | PRD, TRD, ML Spec, Build Plan; V1 archive; config/schema alignment | Complete |
 | **1** | Bloomberg validation + ingestion | Complete — `prices_raw` populated (62,800 rows); exact 50-stock universe verified |
-| **2** | Application skeleton + first deployment | **Next** — public URL showing real dataset coverage only — no fabricated results |
+| **2A** | FastAPI backend skeleton | Complete — read-only endpoints over the real Phase 1 database |
+| **2B/2C** | React/TypeScript frontend + first deployment | **Next** — public URL showing real dataset coverage only — no fabricated results |
 | **3** | Feature + target pipeline | Leakage-safe features; 21-session TRI targets |
 | **4** | Baselines + XGBoost | Walk-forward OOS forecasts, pooled XGBoost |
 | **5** | LSTM | Walk-forward OOS forecasts, pooled LSTM |
@@ -137,7 +140,7 @@ Every Integrity Audit gate, stop/gate criterion, and phase acceptance criterion 
 
 ```
 RiskFecta/
-├── app/                       # FastAPI backend (scaffold; built out in Phase 2)
+├── app/                       # FastAPI backend (Phase 2A skeleton: main.py, db.py, schemas.py, routes/)
 ├── pipeline/                  # ingest.py, features.py (Phases 1 & 3)
 ├── models/                    # baselines.py, xgboost_model.py, lstm.py, ensemble.py (Phases 4-6)
 ├── optimizer/                 # covariance.py, portfolio.py (Phase 7)
@@ -175,6 +178,37 @@ RiskFecta/
 
 Full setup steps: **[docs/SETUP.md](docs/SETUP.md)**.
 Bloomberg export field list: **[docs/Bloomberg_export_spec.md](docs/Bloomberg_export_spec.md)**.
+
+---
+
+## Running the API locally
+
+With `.env` configured (see step 3 above) and dependencies installed:
+
+```powershell
+uvicorn app.main:app --reload
+```
+
+Interactive docs (auto-generated from the Pydantic schemas): `http://127.0.0.1:8000/docs`
+
+Read-only endpoints (Phase 2A — no forecasts, portfolios, or risk metrics; those tables are empty):
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /health` | Process liveness only |
+| `GET /health/ready` | PostgreSQL connectivity check (no credentials in the response) |
+| `GET /api/universe` | The real 50-ticker universe from `prices_raw`, with read-only sector metadata where the local static snapshot is available |
+| `GET /api/prices/{ticker}?start=&end=` | Chronological OHLCV + `total_return_idx` history from `prices_raw`; 404 for an unknown ticker, 400 if `start` is after `end` |
+| `GET /api/market/summary` | Ticker count, row count, and first/last available date — descriptive facts only |
+
+Environment variables:
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `DATABASE_URL` | Yes | Supabase/Postgres connection string (unchanged from Phase 1) |
+| `CORS_ORIGINS` | No | Comma-separated allowed origins for the future React frontend. Defaults to `http://localhost:3000,http://localhost:5173` (CRA/Vite dev servers). Set explicitly, never wildcarded, outside local development. |
+
+An API versioning prefix (e.g. `/api/v1/...`) is deferred, per [TRD.md](TRD.md) §10 — Phase 2A uses a plain `/api/...` prefix; introducing a version prefix later is a documented decision, not a silent breaking change.
 
 ---
 
