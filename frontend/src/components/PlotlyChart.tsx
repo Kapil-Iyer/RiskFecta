@@ -31,8 +31,10 @@ interface PlotlyChartProps {
 
 const DEFAULT_CONFIG: Partial<Config> = {
   responsive: true,
-  displaylogo: false,
-  modeBarButtonsToRemove: ["lasso2d", "select2d"],
+  // The modebar (zoom/pan/export) added clutter and overlapped chart titles
+  // at mobile widths; hover tooltips work fine without it, and this is a
+  // read-only historical viewer, not an analysis workbench.
+  displayModeBar: false,
 };
 
 export default function PlotlyChart({ data, layout, config, className, ariaLabel }: PlotlyChartProps) {

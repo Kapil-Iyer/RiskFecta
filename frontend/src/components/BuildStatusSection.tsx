@@ -1,3 +1,5 @@
+import Badge from "./Badge";
+
 interface StatusItem {
   label: string;
   state: "live" | "planned";
@@ -29,9 +31,7 @@ export default function BuildStatusSection() {
       <ul className="build-status__list">
         {STATUS_ITEMS.map((item) => (
           <li key={item.label} className={`build-status__item build-status__item--${item.state}`}>
-            <span className={`status-pill status-pill--${item.state}`}>
-              {item.state === "live" ? "Live" : "Planned"}
-            </span>
+            <Badge tone={item.state}>{item.state === "live" ? "Live" : "Planned"}</Badge>
             <div>
               <p className="build-status__label">{item.label}</p>
               <p className="build-status__detail">{item.detail}</p>

@@ -8,7 +8,12 @@ RiskFecta is **not** a live trading or order-execution system, and it is **not i
 
 > **Authoritative specification:** [`PRD.md`](PRD.md) (product), [`TRD.md`](TRD.md) (architecture), [`ML_SPEC.md`](ML_SPEC.md) (ML/quant methodology), [`BUILD_PLAN.md`](BUILD_PLAN.md) (execution sequencing). These four documents govern RiskFecta V2 and supersede everything in `PRD_and_buildplan/archive/` (V1 — historical reference only; see [PRD.md § V1 Archive / Supersession](PRD.md#v1-archive--supersession)).
 
-> **Status:** Phase 1 (Data Foundation) complete. Bloomberg CSV data pull is **done**; `prices_raw` is validated, normalized, and ingested into Supabase-hosted PostgreSQL (62,800 rows — exact 50-stock universe, 1,256 valid trading sessions per ticker). Macro (`SPX`/`VIX`/`USGG10YR`) and static snapshot fields (market cap, beta, dividend yield, sector) are validated and normalized but intentionally **not** persisted as their own database tables in Phase 1 — the frozen 5-table schema has no raw destination for them; see [BUILD_PLAN.md](BUILD_PLAN.md) Phase 1's Macro / Static Persistence Note. **Phase 2A (FastAPI backend skeleton) is implemented**: read-only endpoints over the real Phase 1 database (see [Running the API locally](#running-the-api-locally)). **Phase 2B (React + TypeScript + Plotly frontend) is implemented**: a local dashboard consuming that API — real market coverage, universe browser, and historical price/volume charts, with build status honestly marked "planned" where models/portfolios don't exist yet (see [Running the frontend locally](#running-the-frontend-locally)). Deployment (Phase 2C) has **not** been started, and no model, optimizer, forecast, or portfolio code exists yet — see [Current state vs. roadmap](#current-state-vs-roadmap). **No forecasts, backtests, or portfolio results exist yet, and none are presented as real anywhere in this repository.**
+> **Status:** Phase 1 (Data Foundation) complete. Bloomberg CSV data pull is **done**; `prices_raw` is validated, normalized, and ingested into Supabase-hosted PostgreSQL (62,800 rows — exact 50-stock universe, 1,256 valid trading sessions per ticker). Macro (`SPX`/`VIX`/`USGG10YR`) and static snapshot fields (market cap, beta, dividend yield, sector) are validated and normalized but intentionally **not** persisted as their own database tables in Phase 1 — the frozen 5-table schema has no raw destination for them; see [BUILD_PLAN.md](BUILD_PLAN.md) Phase 1's Macro / Static Persistence Note. **Phase 2A (FastAPI backend)** and **Phase 2B (React + TypeScript + Plotly frontend)** are implemented, and **Phase 2C (production deployment + frontend polish) is live**:
+>
+> - **Frontend:** <https://riskfecta.vercel.app>
+> - **API:** <https://riskfecta-api.onrender.com> (interactive docs at `/docs`)
+>
+> See [Production deployment](#production-deployment) for the full architecture and configuration. No model, optimizer, forecast, or portfolio code exists yet — see [Current state vs. roadmap](#current-state-vs-roadmap). **No forecasts, backtests, or portfolio results exist yet, and none are presented as real anywhere in this repository or deployment.**
 
 ---
 
@@ -93,8 +98,8 @@ flowchart LR
 | Macro/static validation + normalization (in-memory; not persisted — see Phase 1 note) | **Done** |
 | FastAPI backend skeleton (`app/`) — `/health`, `/api/universe`, `/api/prices/{ticker}`, `/api/market/summary` | **Done** (Phase 2A) — read-only, real DB data, no fabricated results |
 | React + TypeScript + Plotly frontend (`frontend/`) — market summary, universe browser, price/volume charts | **Done** (Phase 2B) — consumes the real Phase 2A API, no fabricated results |
+| Dark-theme frontend polish, company-name metadata, sector accent theming, production deployment | **Done** (Phase 2C) — live at <https://riskfecta.vercel.app> |
 | Feature engineering, ML models, optimizer | **Planned** — Phases 3–7 |
-| Deployment (public URL) | **Planned** — Phase 2C |
 
 No model has been trained, no forecast has been produced, and no portfolio has been optimized. Nothing in this repository presents a fabricated or illustrative result as real.
 
@@ -108,7 +113,7 @@ Aligned with the locked [`BUILD_PLAN.md`](BUILD_PLAN.md):
 | **1** | Bloomberg validation + ingestion | Complete — `prices_raw` populated (62,800 rows); exact 50-stock universe verified |
 | **2A** | FastAPI backend skeleton | Complete — read-only endpoints over the real Phase 1 database |
 | **2B** | React + TypeScript + Plotly frontend | Complete — local dashboard consuming the real Phase 2A API |
-| **2C** | First deployment | **Next** — public URL showing real dataset coverage only — no fabricated results |
+| **2C** | Frontend polish + production deployment | Complete — live at <https://riskfecta.vercel.app>, showing real dataset coverage only — no fabricated results |
 | **3** | Feature + target pipeline | Leakage-safe features; 21-session TRI targets |
 | **4** | Baselines + XGBoost | Walk-forward OOS forecasts, pooled XGBoost |
 | **5** | LSTM | Walk-forward OOS forecasts, pooled LSTM |
@@ -134,16 +139,24 @@ Every Integrity Audit gate, stop/gate criterion, and phase acceptance criterion 
 | PostgreSQL (Supabase-hosted) | Time-series + forecast + portfolio store |
 | pandas / NumPy / pandas-ta | Data handling and backward-looking indicators |
 | FastAPI | Thin backend API layer |
-| React + TypeScript | Frontend |
-| Plotly | Interactive charts |
+| React + TypeScript (Vite) | Frontend |
+| Plotly (`plotly.js-cartesian-dist-min`) | Interactive charts — line/bar only, no map/3D bundle |
+| Framer Motion | Restrained UI motion (section entry, hover/focus); respects `prefers-reduced-motion` |
+| Lucide | Icons |
 | Bloomberg Terminal | Data source (BQL / Excel → CSV only; no API scripting on laptop) |
+| Vercel / Render / Supabase | Production hosting — frontend / backend / database (see [Production deployment](#production-deployment)) |
 
 ## Repository layout
 
 ```
 RiskFecta/
 ├── app/                       # FastAPI backend (Phase 2A skeleton: main.py, db.py, schemas.py, routes/)
-├── frontend/                  # React + TypeScript + Plotly frontend (Phase 2B: src/api, src/components)
+├── frontend/                  # React + TypeScript + Plotly frontend (Phase 2B/2C)
+│   └── src/
+│       ├── api/               # centralized API client + types
+│       ├── components/        # Header, UniverseBrowser, TickerDetail, charts, …
+│       ├── data/               # companyNames.ts, tickerUniverse.ts — frontend metadata source of truth
+│       └── theme.ts            # sector accent theming (Information Technology / Financials)
 ├── pipeline/                  # ingest.py, features.py (Phases 1 & 3)
 ├── models/                    # baselines.py, xgboost_model.py, lstm.py, ensemble.py (Phases 4-6)
 ├── optimizer/                 # covariance.py, portfolio.py (Phase 7)
@@ -152,6 +165,7 @@ RiskFecta/
 ├── config.py                  # Universe, features, rolling-window constants
 ├── schema.sql                 # PostgreSQL DDL
 ├── requirements.txt
+├── .python-version            # Render/pyenv reproducibility fallback (3.13.5) — see Production deployment
 ├── docs/
 │   ├── SETUP.md
 │   └── Bloomberg_export_spec.md
@@ -235,7 +249,7 @@ The Phase 2B frontend (`frontend/`) is a Vite + React + TypeScript app that cons
    ```
    Open `http://localhost:5173`.
 
-What it shows: RiskFecta branding, a build-status panel honestly marked "live" (historical data) vs. "planned" (forecasts, portfolio optimization), the real market summary and universe from the API, and a ticker detail view with Plotly close-price and volume charts plus date-range filtering — all sourced from `GET /api/*`, nothing fabricated.
+What it shows: RiskFecta branding (an original efficient-frontier logomark — `src/components/Logo.tsx`), a dark quantitative-research UI with sector-based accent theming (Information Technology: blue/cyan, Financials: amber/gold), a build-status panel honestly marked "live" (historical data) vs. "planned" (forecasts, portfolio optimization), the real market summary and a searchable universe browser (ticker, company name, sector — see [`src/data/companyNames.ts`](frontend/src/data/companyNames.ts) for the metadata source of truth), and a ticker detail view with a "latest dataset observation" (never called a live/current price), quick date ranges (1M/6M/1Y/3Y/ALL, computed client-side), and Plotly close-price and volume charts — all sourced from `GET /api/*`, nothing fabricated.
 
 Other commands (run from `frontend/`):
 
@@ -252,6 +266,72 @@ Environment variables:
 | `VITE_API_BASE_URL` | No | Base URL of the FastAPI backend. Not a secret — safe to bake into the client bundle. Defaults to `http://127.0.0.1:8000`. |
 
 Make sure the backend's `CORS_ORIGINS` (see above) includes the frontend's dev origin — `http://localhost:5173` is already in its default.
+
+---
+
+## Production deployment
+
+Live URLs:
+
+- **Frontend:** <https://riskfecta.vercel.app>
+- **Backend API:** <https://riskfecta-api.onrender.com> (`/health`, `/health/ready`, `/docs`)
+
+Architecture (unchanged from [TRD.md](TRD.md) §5/§13 — providers only, no architectural change):
+
+```
+Vercel (React/TypeScript frontend)
+        │  HTTPS, VITE_API_BASE_URL
+        ▼
+Render (FastAPI backend, uvicorn)
+        │  DATABASE_URL (server-side only)
+        ▼
+Supabase (managed PostgreSQL)
+```
+
+The frontend never connects to Supabase/PostgreSQL directly — every read goes through the Render-hosted API.
+
+### Frontend — Vercel
+
+| Setting | Value |
+|---|---|
+| Root directory | `frontend/` |
+| Framework preset | Vite (auto-detected) |
+| Build command | `npm run build` (`tsc -b && vite build`) |
+| Output directory | `dist` |
+| Environment variable | `VITE_API_BASE_URL=https://riskfecta-api.onrender.com` |
+
+`DATABASE_URL` must never exist in the Vercel/frontend environment — the frontend has no code path that could use it, and setting it there would be a meaningless credential exposure risk. `VITE_API_BASE_URL` is not a secret (it's baked into the public client bundle by design — see [Running the frontend locally](#running-the-frontend-locally)).
+
+Vercel auto-deploys on push to `main` via its GitHub App connection to this repository (verified, not assumed) — no separate GitHub Actions workflow exists or is claimed here.
+
+### Backend — Render
+
+| Setting | Value |
+|---|---|
+| Repository root | `.` (repo root, not `frontend/`) |
+| Build command | `pip install -r requirements.txt` |
+| Start command | `uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
+| Health check path | `/health` |
+| Environment variable | `DATABASE_URL` (private — Supabase connection string) |
+| Environment variable | `CORS_ORIGINS=https://riskfecta.vercel.app` |
+
+Render also auto-deploys on push to `main` via its GitHub connection.
+
+**Python version pinning:** Render's own default runtime moved to Python 3.14.3, which broke this project's build — a numba-dependent transitive dependency (via `pandas-ta`) rejects Python ≥3.14 (the same constraint already documented in [requirements.txt](requirements.txt): "Use Python 3.10–3.13"). The fix in production is Render's `PYTHON_VERSION` environment variable, set to a 3.13.x release in the Render dashboard (highest-precedence mechanism per [Render's Python version docs](https://render.com/docs/python-version)). This repo additionally commits [`.python-version`](.python-version) (`3.13.5`) at the root as a lower-precedence, in-repo fallback — so a fresh Render service created from this repo (or a local `pyenv` setup) lands on a working version even before anyone touches the dashboard, without changing the already-documented local-dev range.
+> **Correction:** an earlier suggestion for this fix proposed a `runtime.txt` file (the legacy Heroku convention). Render's current docs (checked directly, September 2026) do **not** list `runtime.txt` as a supported mechanism — only the `PYTHON_VERSION` env var and `.python-version` file are. This repo uses the latter; `runtime.txt` was not added.
+
+**Cold starts:** this is deployed on Render's free tier, which spins the service down after a period of inactivity. The first request after idling can take on the order of tens of seconds while it cold-starts — expected and acceptable for a portfolio-scale deployment, not a defect. `GET /health` and `GET /health/ready` both work publicly and are the fastest way to check current backend/database reachability.
+
+### Database — Supabase
+
+Unchanged from Phase 1B: standard PostgreSQL connection string via `DATABASE_URL`, no Supabase client library, Auth, or Storage. See [TRD.md](TRD.md) §5.
+
+### Security
+
+- No credentials are committed; `.env` (backend) and `frontend/.env*` (except `.env.example`) are gitignored.
+- `DATABASE_URL` exists only as a private Render environment variable — never in frontend code, the frontend environment, or the client bundle.
+- `VITE_API_BASE_URL` is public configuration (the API is meant to be called from a browser), not a secret.
+- CORS on the backend is restricted to explicit origins (`CORS_ORIGINS`), never a wildcard, in every environment.
 
 ---
 

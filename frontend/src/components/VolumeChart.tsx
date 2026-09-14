@@ -2,14 +2,16 @@ import { useMemo } from "react";
 import type { Data, Layout } from "plotly.js-cartesian-dist-min";
 import type { PriceObservation } from "../api/types";
 import PlotlyChart from "./PlotlyChart";
+import { DARK_CHART_LAYOUT } from "./chartTheme";
 
 interface VolumeChartProps {
   ticker: string;
   prices: PriceObservation[];
+  accentColor: string;
 }
 
 /** Chronological daily volume bar chart, straight from `prices_raw.volume`. */
-export default function VolumeChart({ ticker, prices }: VolumeChartProps) {
+export default function VolumeChart({ ticker, prices, accentColor }: VolumeChartProps) {
   const data = useMemo<Data[]>(
     () => [
       {
@@ -17,21 +19,19 @@ export default function VolumeChart({ ticker, prices }: VolumeChartProps) {
         name: `${ticker} volume`,
         x: prices.map((p) => p.date),
         y: prices.map((p) => p.volume),
-        marker: { color: "#94a3b8" },
+        marker: { color: accentColor, opacity: 0.55 },
         hovertemplate: "%{x}<br>Volume: %{y:,}<extra></extra>",
       },
     ],
-    [ticker, prices],
+    [ticker, prices, accentColor],
   );
 
   const layout = useMemo<Partial<Layout>>(
     () => ({
-      title: { text: `${ticker} — daily volume` },
-      xaxis: { type: "date" },
-      yaxis: { title: { text: "Shares traded" } },
-      margin: { t: 48, r: 24, b: 40, l: 64 },
-      autosize: true,
-      font: { family: "Inter, system-ui, sans-serif", size: 12 },
+      ...DARK_CHART_LAYOUT,
+      title: { text: `${ticker} — daily volume`, font: { size: 13 } },
+      xaxis: { ...DARK_CHART_LAYOUT.xaxis, type: "date" },
+      yaxis: { ...DARK_CHART_LAYOUT.yaxis, title: { text: "Shares traded" } },
     }),
     [ticker],
   );

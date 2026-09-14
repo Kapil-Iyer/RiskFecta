@@ -1,10 +1,10 @@
+import Logo from "./Logo";
+
 export default function Header() {
   return (
     <header className="app-header">
       <div className="app-header__brand">
-        <span className="app-header__mark" aria-hidden="true">
-          RF
-        </span>
+        <Logo size={36} />
         <div>
           <h1>RiskFecta</h1>
           <p className="app-header__tagline">Quantitative Portfolio Intelligence Platform</p>
