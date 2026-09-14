@@ -56,7 +56,6 @@ LSTM_ALL_FEATURES = LSTM_PRICE_COLS + LSTM_FEATURE_COLS
 
 # XGBoost: tabular features per (ticker, date)
 XGBOOST_FEATURE_COLS = [
-    "beta", "mkt_cap_log", "div_yield", "sector",  # sector encoded in pipeline
     "vix", "yield_10y", "momentum_3m", "momentum_6m", "volatility_20d",
 ]
 

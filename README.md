@@ -1,120 +1,118 @@
 # RiskFecta
 
-> **V1 archive notice:** Much of this README still describes the archived V1 plan (e.g. 30-day horizon, Streamlit, Tableau). It is **not** authoritative for RiskFecta V2. Active baseline: `config.py`, `schema.sql`, `requirements.txt`, `.env.example`, `docs/SETUP.md`. A coherent V2 docs rewrite is forthcoming.
-
 **Quantitative Portfolio Intelligence Platform**
 
-RiskFecta is a Python-based portfolio analytics system that combines machine-learning return forecasting with Modern Portfolio Theory optimization. It ingests institutional-grade market data from Bloomberg Terminal, trains a hybrid **LSTM + XGBoost** ensemble to predict 30-day forward returns, and feeds those signals into a **SciPy Efficient Frontier** optimizer—then surfaces results through an interactive **Streamlit** demo and a professional **Tableau** report.
+RiskFecta is a quantitative portfolio research and construction platform. It ingests institutional-grade Bloomberg market and macro data for a fixed 50-equity universe (25 Information Technology + 25 Financials), forecasts **21-trading-session forward total returns** with a pooled **XGBoost** model and a pooled **LSTM** model, combines them into a **50/50 equal-weight ensemble**, and feeds the ensemble forecasts — alongside a historical-realized-return covariance estimate — into a constrained **mean-variance optimizer** to construct long-only portfolios on the **Efficient Frontier**. Results are (once built) presented through a **FastAPI** backend, a **React + TypeScript** frontend, and **Plotly** charts.
 
-> **Status (May 2026):** Early development — **Phase 0 (pre-build)** complete. Repository scaffold, database schema, configuration, and documentation are in place. Data pipeline, models, optimizer, and deployment are planned per the locked PRD and build plan (Phases 1–9).
+RiskFecta is **not** a live trading or order-execution system, and it is **not investment advice**. It is a research and analytics project with strict walk-forward, out-of-sample validation and look-ahead controls.
+
+> **Authoritative specification:** [`PRD.md`](PRD.md) (product), [`TRD.md`](TRD.md) (architecture), [`ML_SPEC.md`](ML_SPEC.md) (ML/quant methodology), [`BUILD_PLAN.md`](BUILD_PLAN.md) (execution sequencing). These four documents govern RiskFecta V2 and supersede everything in `PRD_and_buildplan/archive/` (V1 — historical reference only; see [PRD.md § V1 Archive / Supersession](PRD.md#v1-archive--supersession)).
+
+> **Status:** Specification frozen (Phase 0). Bloomberg CSV data pull is **done**; Bloomberg CSV ingestion into PostgreSQL is **planned, not started**. No model, optimizer, or application code has been implemented yet — see [Current state vs. roadmap](#current-state-vs-roadmap). **No forecasts, backtests, or portfolio results exist yet, and none are presented as real anywhere in this repository.**
 
 ---
 
 ## The problem we are solving
 
-Professional portfolio tools (e.g. Bloomberg PORT, FactSet) cost tens of thousands of dollars per year and are out of reach for most retail investors. Free alternatives typically rely on historical averages for expected returns and do not combine deep learning, factor models, and rigorous optimization in one reproducible, deployable stack.
+Professional portfolio tools (e.g. Bloomberg PORT, FactSet) cost tens of thousands of dollars a year and are out of reach for most retail investors and researchers. Free alternatives typically fall back to naive historical-average expected returns and rarely combine a rigorous ML forecasting pipeline with disciplined mean-variance optimization and honest, walk-forward out-of-sample evaluation in one reproducible, deployed system.
 
-**RiskFecta’s goal:** Build an accessible, interview-defensible quant platform that:
+**RiskFecta's goal:** build an accessible, interview-defensible quant research platform that:
 
-1. Sources real Bloomberg data (BQL / Excel export → CSV → PostgreSQL)
-2. Forecasts 30-day returns with a **dual-model ensemble** (sequential LSTM + tabular XGBoost)
-3. Optimizes long-only portfolios on the **Efficient Frontier** using ensemble expected returns and realized-return covariance
-4. Presents outcomes interactively (Streamlit + Plotly) and in a recruiter-facing static report (Tableau)
-
-RiskFecta is **not** a live trading or order-execution system. It is a research and analytics platform with strict out-of-sample validation and look-ahead controls.
-
----
+1. Sources real Bloomberg data (BQL / Excel export → CSV → Supabase-hosted PostgreSQL).
+2. Forecasts 21-trading-session forward total returns with a pooled dual-model ensemble (pooled LSTM + pooled XGBoost, trained/evaluated under temporal walk-forward splits — never random splits).
+3. Optimizes long-only portfolios on the Efficient Frontier using ensemble expected returns and historical-realized-return covariance (sample vs. Ledoit-Wolf shrinkage, selected from walk-forward evidence, not preselected).
+4. Presents outcomes through a FastAPI + React/TypeScript web application with Plotly visualizations.
 
 ## Architecture (target state)
 
 ```mermaid
 flowchart LR
-    subgraph ingest [Phase 1–2]
+    subgraph ingest [Phase 1]
         BB[Bloomberg BQL / Excel]
         CSV[CSV exports]
-        PG[(PostgreSQL)]
+        PG[(Supabase PostgreSQL)]
         BB --> CSV --> PG
     end
 
-    subgraph ml [Phase 3–5]
-        LSTM[LSTM — price sequences]
-        XGB[XGBoost — factors / macro]
-        ENS[50/50 ensemble]
+    subgraph ml [Phase 3-6]
+        LSTM[Pooled LSTM - 60-session sequences]
+        XGB[Pooled XGBoost - tabular features]
+        ENS[50/50 equal-weight ensemble]
         LSTM --> ENS
         XGB --> ENS
     end
 
-    subgraph opt [Phase 6]
-        MPT[SciPy MPT optimizer]
+    subgraph opt [Phase 7]
+        COV[Covariance: sample vs Ledoit-Wolf]
+        MPT[SciPy constrained mean-variance optimizer]
         EF[Efficient Frontier]
-        ENS --> MPT --> EF
+        ENS --> MPT
+        COV --> MPT
+        MPT --> EF
     end
 
-    subgraph viz [Phase 7–8]
-        ST[Streamlit Cloud]
-        TB[Tableau report]
-        EF --> ST
-        EF --> TB
+    subgraph app [Phase 2 & 8]
+        API[FastAPI]
+        FE[React + TypeScript + Plotly]
+        EF --> API --> FE
     end
 
     PG --> LSTM
     PG --> XGB
-    PG --> MPT
+    PG --> COV
 ```
 
 | Layer | Role |
 |--------|------|
-| **Bloomberg Terminal** | Raw OHLCV, total return, static equity fields, macro (VIX, 10Y yield, SPX) |
-| **Python pipeline** | Ingestion, backward-looking technical indicators (RSI, MACD, Bollinger, momentum, vol) |
-| **LSTM (PyTorch)** | 60-day sequences → 30-day return forecast |
-| **XGBoost** | Tabular factors (beta, cap, sector, macro, momentum) → 30-day return forecast |
-| **Ensemble** | `0.5 × LSTM + 0.5 × XGBoost` → expected return vector |
-| **Optimizer (SciPy)** | Long-only Efficient Frontier; covariance from **realized** returns only |
-| **Streamlit + Plotly** | Live multi-page demo (weights, frontier, predictions, model metrics, risk) |
-| **Tableau** | Three static dashboards for portfolio, model, and risk analytics |
+| **Bloomberg Terminal** | Raw OHLCV, total return index, static equity fields, macro (VIX, USGG10YR, SPX) |
+| **Python pipeline** | Ingestion, trading-session filtering, backward-looking technical indicators |
+| **Pooled LSTM (PyTorch)** | 60-valid-session sequences → 21-session forward total-return forecast |
+| **Pooled XGBoost** | Tabular macro/technical features → 21-session forward total-return forecast |
+| **Ensemble** | `0.5 × XGBoost + 0.5 × LSTM` → expected return vector (fixed 50/50; not validation-weighted) |
+| **Optimizer (SciPy)** | Long-only, fully-invested, constrained Efficient Frontier; covariance from **realized** returns only (sample vs. Ledoit-Wolf, chosen from evidence) |
+| **FastAPI** | Thin API layer over the pipeline/model/optimizer modules |
+| **React + TypeScript + Plotly** | Research dashboard: universe, forecasts, model comparison, portfolio construction, risk analytics, methodology |
 
-**Validation (locked):** Rolling window — **252** trading-day train, **21**-day step, **30**-day forecast horizon; final 3 months held out for final evaluation. No expanding window; no regime classifier. Risk-free rate for Sharpe: **USGG10YR / 252** everywhere.
+**Validation (locked, see [ML_SPEC.md](ML_SPEC.md)):** rolling window — **252**-trading-session train, **21**-session step, **21**-session forecast horizon, `LSTM_SEQ = 60`. Walk-forward temporal splits only — no random train/test splitting. A single **sealed March 2026 holdout** case study is evaluated once, only after methodology is fully frozen. Risk-free rate for Sharpe: `(USGG10YR / 100) / 252` (percent-normalized annual yield converted to a per-session rate).
 
 ---
 
 ## Current state vs. roadmap
 
-### What exists today (Phase 0)
+### What exists today
 
 | Deliverable | Status |
 |-------------|--------|
-| Repo layout (`pipeline/`, `models/`, `optimizer/`, `app/`, `tests/`, `tableau/`) | Done |
+| Repo layout (`pipeline/`, `models/`, `optimizer/`, `app/`, `tests/`) | Done |
 | `requirements.txt`, `config.py` (universe, features, rolling constants) | Done |
 | `schema.sql` (5 tables: prices, features, predictions, portfolios, risk_metrics) | Done |
 | `docs/SETUP.md`, `docs/Bloomberg_export_spec.md` | Done |
-| Local PostgreSQL + `.env` | **Your machine** — see [docs/SETUP.md](docs/SETUP.md) |
-| Bloomberg CSV data pull| Done |
-| Bloomberg CSV ingestion | Planned|
-| Feature engineering, ML, optimizer, UI | Planned — Phases 2–8 |
+| **V2 specification package** — `PRD.md`, `TRD.md`, `ML_SPEC.md`, `BUILD_PLAN.md` | Done (frozen) |
+| Bloomberg CSV data pull | **Done** |
+| Bloomberg CSV ingestion (into PostgreSQL) | **Planned** |
+| Feature engineering, ML models, optimizer, FastAPI, React frontend | **Planned** — Phases 2–8 |
 
-**MVP-A** (minimum viable product) is complete when: real Bloomberg data is ingested; rolling-window LSTM and XGBoost run without leakage; ensemble and Efficient Frontier are computed; Streamlit Cloud demo runs on that data. See `PRD_and_buildplan/Phase0_Plan.md` for criteria.
+No model has been trained, no forecast has been produced, and no portfolio has been optimized. Nothing in this repository presents a fabricated or illustrative result as real.
 
-### Build phases (projection)
+### Build phases
 
-Aligned with the locked [Build Plan](PRD_and_buildplan/BuildPlan_extracted.txt) (~85–90 hrs total):
+Aligned with the locked [`BUILD_PLAN.md`](BUILD_PLAN.md):
 
 | Phase | Focus | Key output |
 |-------|--------|------------|
-| **0 — Pre-build** | Environment, schema, config | Repo + DB scaffold *(current)* |
-| **1** | Bloomberg pull + `ingest.py` | `prices_raw` populated; UNIQUE constraints verified |
-| **2** | `features.py` | Technical + factor features in `features` |
-| **3** | `lstm.py` (+ leakage audit) | `lstm_pred` in `predictions` |
-| **4** | `xgboost_model.py` | `xgb_pred` in `predictions` |
-| **5** | `ensemble.py` | `ensemble_pred`, directional accuracy, evaluation |
-| **6** | `portfolio.py` | Efficient Frontier → `portfolios`, `risk_metrics` |
-| **7** | Streamlit app + cloud DB | **Live demo URL** (5 pages, Plotly) |
-| **8** | Tableau | **Public link or PDF** — 3 dashboards |
-| **9** | Tests, polish, portfolio embed | `pytest`, README links, release tag |
+| **0 — Specification** | PRD, TRD, ML Spec, Build Plan; V1 archive; config/schema alignment | This documentation package *(current)* |
+| **1** | Bloomberg validation + ingestion | `prices_raw` populated; exact 50-stock universe verified |
+| **2** | Application skeleton + first deployment | Public URL showing real dataset coverage only — no fabricated results |
+| **3** | Feature + target pipeline | Leakage-safe features; 21-session TRI targets |
+| **4** | Baselines + XGBoost | Walk-forward OOS forecasts, pooled XGBoost |
+| **5** | LSTM | Walk-forward OOS forecasts, pooled LSTM |
+| **6** | Walk-forward comparison + ensemble | Model comparison evidence; 50/50 ensemble |
+| **7** | Portfolio optimization | Covariance experiment; Efficient Frontier; min-vol/max-Sharpe |
+| **8** | Full research dashboard | All PRD-listed pages live on real data |
+| **9** | Sealed March 2026 evaluation | One-time, frozen-methodology holdout case study |
+| **10** | Hardening + release | Full tests, CI/CD audit, final README, honest resume metrics |
 
-Live links will be added here after Phase 7–8:
-
-- **Streamlit demo:** *coming soon*
-- **Tableau report:** *coming soon*
+Every Integrity Audit gate, stop/gate criterion, and phase acceptance criterion is defined in [`BUILD_PLAN.md`](BUILD_PLAN.md).
 
 ---
 
@@ -123,36 +121,35 @@ Live links will be added here after Phase 7–8:
 | Technology | Use in RiskFecta |
 |------------|------------------|
 | Python 3.10–3.13 | Core language |
-| PyTorch | LSTM |
-| XGBoost | Tabular return model |
-| scikit-learn | Preprocessing, evaluation helpers |
-| SciPy | Portfolio optimization (SLSQP) |
-| PostgreSQL | Time-series store (local dev; Supabase/Neon for deploy) |
-| pandas / NumPy / pandas-ta | Data + backward-looking indicators |
-| Plotly + Streamlit | Interactive web app |
-| Tableau | Static professional report |
+| PyTorch | Pooled LSTM |
+| XGBoost | Pooled tabular return model |
+| scikit-learn | Preprocessing, evaluation helpers, Ledoit-Wolf shrinkage |
+| SciPy | Constrained mean-variance portfolio optimization (SLSQP) |
+| PostgreSQL (Supabase-hosted) | Time-series + forecast + portfolio store |
+| pandas / NumPy / pandas-ta | Data handling and backward-looking indicators |
+| FastAPI | Thin backend API layer |
+| React + TypeScript | Frontend |
+| Plotly | Interactive charts |
 | Bloomberg Terminal | Data source (BQL / Excel → CSV only; no API scripting on laptop) |
-
----
 
 ## Repository layout
 
 ```
 RiskFecta/
-├── app/                 # Streamlit app (Phase 7)
-├── pipeline/            # ingest.py, features.py (Phases 1–2)
-├── models/              # lstm.py, xgboost_model.py, ensemble.py (Phases 3–5)
-├── optimizer/           # portfolio.py (Phase 6)
-├── tests/               # Pipeline & model tests (Phase 9)
-├── tableau/             # Tableau workbook / exports (Phase 8)
-├── data/raw/            # Bloomberg CSVs (gitignored)
-├── config.py            # Universe, features, rolling-window constants
-├── schema.sql           # PostgreSQL DDL
+├── app/                       # FastAPI backend (scaffold; built out in Phase 2)
+├── pipeline/                  # ingest.py, features.py (Phases 1 & 3)
+├── models/                    # baselines.py, xgboost_model.py, lstm.py, ensemble.py (Phases 4-6)
+├── optimizer/                 # covariance.py, portfolio.py (Phase 7)
+├── tests/                     # pytest suite
+├── data/raw/                  # Bloomberg CSVs (gitignored)
+├── config.py                  # Universe, features, rolling-window constants
+├── schema.sql                 # PostgreSQL DDL
 ├── requirements.txt
 ├── docs/
 │   ├── SETUP.md
 │   └── Bloomberg_export_spec.md
-└── PRD_and_buildplan/   # Locked PRD v1.0 + build plan (reference)
+├── PRD.md / TRD.md / ML_SPEC.md / BUILD_PLAN.md   # V2 source of truth
+└── PRD_and_buildplan/archive/  # V1 material — historical reference only, does not govern V2
 ```
 
 ---
@@ -166,25 +163,25 @@ RiskFecta/
    .\venv\Scripts\Activate.ps1
    pip install -r requirements.txt
    ```
-3. **PostgreSQL:** Create database `riskfecta`, apply `schema.sql`, add `.env` from `.env.example`:
+3. **PostgreSQL (Supabase-hosted):** create a Supabase project, apply `schema.sql`, and set `.env` from `.env.example`:
    ```
-   DATABASE_URL=postgresql://user:password@localhost:5432/riskfecta
+   DATABASE_URL=postgresql://postgres.PROJECT_REF:PASSWORD@aws-0-REGION.pooler.supabase.com:6543/postgres
    ```
 4. **Verify config:**
    ```powershell
-   python -c "import config; print(config.TRAIN_WINDOW, config.STEP)"
+   python -c "import config; print(config.TRAIN_WINDOW, config.STEP, config.LSTM_SEQ, config.FORECAST_HORIZON)"
    ```
 
-Full Windows/PostgreSQL steps: **[docs/SETUP.md](docs/SETUP.md)**.  
-Bloomberg export field list for Phase 1: **[docs/Bloomberg_export_spec.md](docs/Bloomberg_export_spec.md)**.
+Full setup steps: **[docs/SETUP.md](docs/SETUP.md)**.
+Bloomberg export field list: **[docs/Bloomberg_export_spec.md](docs/Bloomberg_export_spec.md)**.
 
 ---
 
 ## Data & privacy
 
-- Bloomberg CSVs live under `data/raw/` and are **gitignored**.
+- Bloomberg CSVs live under `data/raw/` and are **gitignored**; they are treated as immutable and are never hand-edited.
 - Never commit `.env`, credentials, or raw market exports.
-- Missing Bloomberg values remain **NULL** in the database; forward-fill happens only in feature engineering (Phase 2), not at ingest.
+- Genuine missing Bloomberg values remain **NULL** in the database; forward-fill happens only in feature engineering (Phase 3), never at ingest, per-ticker, past-only.
 
 ---
 
@@ -192,19 +189,24 @@ Bloomberg export field list for Phase 1: **[docs/Bloomberg_export_spec.md](docs/
 
 RiskFecta intentionally does **not** include:
 
-- Live trading or paper trading
-- Synthetic or Yahoo Finance substitutes for MVP (real Bloomberg export required)
-- Bloomberg API scripting from a personal laptop
-- SQLite / Power BI (those belong to a separate project, PlainCents)
+- Live trading, paper trading, or order execution.
+- Personalized investment advice.
+- Synthetic or Yahoo Finance substitutes for MVP (real Bloomberg export required).
+- Bloomberg API scripting from a personal laptop.
+- Leverage, shorting, Black-Litterman, risk parity, or robust optimization (unless separately approved).
+- Learned ticker embeddings or ordinal ticker IDs as default MVP model features.
+- Consumer budgeting/transaction tracking or systemic/graph-based contagion research — see [PRD.md § Differentiation](PRD.md#5-differentiation).
+
+See [PRD.md § Non-Goals](PRD.md#8-non-goals) for the complete list.
 
 ---
 
 ## Author & context
 
-**Kapil Iyer** — University of Waterloo  
-Academic / internship-tier quant portfolio project (2026). Architecture and ML decisions are pre-validated in the PRD for reproducibility and technical interviews.
+**Kapil Iyer** — University of Waterloo
+Academic / internship-tier quantitative portfolio research project (2026). Architecture and ML methodology are specified in [`PRD.md`](PRD.md), [`TRD.md`](TRD.md), and [`ML_SPEC.md`](ML_SPEC.md) for reproducibility and technical review.
 
-For internal planning detail, see `PRD_and_buildplan/` (PRD v1.0, build plan v1.0, Phase 0 checklist).
+For historical V1 planning material (superseded, not authoritative), see `PRD_and_buildplan/archive/`.
 
 ---
 

@@ -11,7 +11,7 @@
 
 ## Pull 2 — Static equity fields (one-time)
 
-- **Fields:** CUR_MKT_CAP, BETA_RAW_OVERRIDABLE, DVD_YLD_IND, GICS_SECTOR_NAME per ticker.
+- **Fields:** CUR_MKT_CAP, BETA_RAW_OVERRIDABLE, DIVIDEND_INDICATED_YIELD, GICS_SECTOR_NAME per ticker.
 - **Output CSV:** `data/raw/static_fields.csv`.
 
 ## Pull 3 — Macro (daily)
