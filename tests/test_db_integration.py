@@ -27,6 +27,22 @@ EXPECTED_TABLES = ["prices_raw", "features", "predictions", "portfolios", "risk_
 EXPECTED_ROW_COUNT = 62_800  # 50 tickers x 1256 valid sessions each (Phase 1A audit)
 
 
+def _fetch_prices_raw_as_frame(conn) -> pd.DataFrame:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT ticker, date, open, high, low, close, volume, total_return_idx "
+            "FROM prices_raw ORDER BY ticker, date"
+        )
+        rows = cur.fetchall()
+        cols = [d[0] for d in cur.description]
+    out = pd.DataFrame(rows, columns=cols)
+    out["date"] = pd.to_datetime(out["date"])
+    for c in ["open", "high", "low", "close", "total_return_idx"]:
+        out[c] = out[c].astype(float)
+    out["volume"] = out["volume"].astype("Float64")
+    return out
+
+
 @pytest.fixture(scope="module")
 def live_conn():
     """One reusable read connection for the module, in autocommit mode so
@@ -121,6 +137,36 @@ def test_min_max_date_range(live_conn):
 def test_close_is_never_null(live_conn):
     n = db.fetch_scalar(live_conn, "SELECT COUNT(*) FROM prices_raw WHERE close IS NULL")
     assert n == 0
+
+
+@_skip_no_db
+def test_full_normalized_vs_db_value_fidelity(live_conn):
+    """Phase 1C closeout check: compare EVERY normalized row (all 62,800),
+    not a sample, against the live DB. NUMERIC(12,4) columns are compared
+    with a 5e-4 tolerance to account for the schema's intentional 4-decimal
+    storage precision (the raw export carries up to 8-9 decimal places on
+    some fields) — anything beyond that tolerance is a genuine mismatch.
+    """
+    normalized = normalize.normalize_prices().sort_values(["ticker", "date"]).reset_index(drop=True)
+    db_df = _fetch_prices_raw_as_frame(live_conn)
+
+    assert len(normalized) == len(db_df) == EXPECTED_ROW_COUNT
+
+    merged = normalized.merge(db_df, on=["ticker", "date"], suffixes=("_norm", "_db"), how="outer", indicator=True)
+    assert (merged["_merge"] == "both").all(), "row present in only one of normalize output / DB"
+
+    for col in ["open", "high", "low", "close", "total_return_idx"]:
+        a, b = merged[f"{col}_norm"], merged[f"{col}_db"]
+        both_nan = a.isna() & b.isna()
+        mismatched_nullness = a.isna() != b.isna()
+        value_diff_too_large = ~both_nan & ~mismatched_nullness & ((a - b).abs() > 5e-4)
+        assert not mismatched_nullness.any(), f"{col}: NULL-ness disagreement between normalize output and DB"
+        assert not value_diff_too_large.any(), f"{col}: value(s) differ by more than schema NUMERIC(12,4) precision"
+
+    vol_norm, vol_db = merged["volume_norm"], merged["volume_db"]
+    both_nan_v = vol_norm.isna() & vol_db.isna()
+    mismatched_v = ~both_nan_v & ((vol_norm.isna() != vol_db.isna()) | ((vol_norm - vol_db).abs() > 0.5))
+    assert not mismatched_v.any(), "volume: mismatch between normalize output and DB"
 
 
 @_skip_no_db

@@ -8,7 +8,7 @@ RiskFecta is **not** a live trading or order-execution system, and it is **not i
 
 > **Authoritative specification:** [`PRD.md`](PRD.md) (product), [`TRD.md`](TRD.md) (architecture), [`ML_SPEC.md`](ML_SPEC.md) (ML/quant methodology), [`BUILD_PLAN.md`](BUILD_PLAN.md) (execution sequencing). These four documents govern RiskFecta V2 and supersede everything in `PRD_and_buildplan/archive/` (V1 — historical reference only; see [PRD.md § V1 Archive / Supersession](PRD.md#v1-archive--supersession)).
 
-> **Status:** Specification frozen (Phase 0). Bloomberg CSV data pull is **done**; Bloomberg CSV ingestion into PostgreSQL is **planned, not started**. No model, optimizer, or application code has been implemented yet — see [Current state vs. roadmap](#current-state-vs-roadmap). **No forecasts, backtests, or portfolio results exist yet, and none are presented as real anywhere in this repository.**
+> **Status:** Phase 1 (Data Foundation) complete. Bloomberg CSV data pull is **done**; `prices_raw` is validated, normalized, and ingested into Supabase-hosted PostgreSQL (62,800 rows — exact 50-stock universe, 1,256 valid trading sessions per ticker). Macro (`SPX`/`VIX`/`USGG10YR`) and static snapshot fields (market cap, beta, dividend yield, sector) are validated and normalized but intentionally **not** persisted as their own database tables in Phase 1 — the frozen 5-table schema has no raw destination for them; see [BUILD_PLAN.md](BUILD_PLAN.md) Phase 1's Macro / Static Persistence Note. No model, optimizer, or application code has been implemented yet — see [Current state vs. roadmap](#current-state-vs-roadmap). **No forecasts, backtests, or portfolio results exist yet, and none are presented as real anywhere in this repository.**
 
 ---
 
@@ -89,7 +89,8 @@ flowchart LR
 | `docs/SETUP.md`, `docs/Bloomberg_export_spec.md` | Done |
 | **V2 specification package** — `PRD.md`, `TRD.md`, `ML_SPEC.md`, `BUILD_PLAN.md` | Done (frozen) |
 | Bloomberg CSV data pull | **Done** |
-| Bloomberg CSV ingestion (into PostgreSQL) | **Planned** |
+| `prices_raw` validation, normalization, and PostgreSQL ingestion (Phase 1A/1B/1C) | **Done** — 62,800 rows, exact 50-stock universe |
+| Macro/static validation + normalization (in-memory; not persisted — see Phase 1 note) | **Done** |
 | Feature engineering, ML models, optimizer, FastAPI, React frontend | **Planned** — Phases 2–8 |
 
 No model has been trained, no forecast has been produced, and no portfolio has been optimized. Nothing in this repository presents a fabricated or illustrative result as real.
@@ -100,9 +101,9 @@ Aligned with the locked [`BUILD_PLAN.md`](BUILD_PLAN.md):
 
 | Phase | Focus | Key output |
 |-------|--------|------------|
-| **0 — Specification** | PRD, TRD, ML Spec, Build Plan; V1 archive; config/schema alignment | This documentation package *(current)* |
-| **1** | Bloomberg validation + ingestion | `prices_raw` populated; exact 50-stock universe verified |
-| **2** | Application skeleton + first deployment | Public URL showing real dataset coverage only — no fabricated results |
+| **0 — Specification** | PRD, TRD, ML Spec, Build Plan; V1 archive; config/schema alignment | Complete |
+| **1** | Bloomberg validation + ingestion | Complete — `prices_raw` populated (62,800 rows); exact 50-stock universe verified |
+| **2** | Application skeleton + first deployment | **Next** — public URL showing real dataset coverage only — no fabricated results |
 | **3** | Feature + target pipeline | Leakage-safe features; 21-session TRI targets |
 | **4** | Baselines + XGBoost | Walk-forward OOS forecasts, pooled XGBoost |
 | **5** | LSTM | Walk-forward OOS forecasts, pooled LSTM |
@@ -182,6 +183,7 @@ Bloomberg export field list: **[docs/Bloomberg_export_spec.md](docs/Bloomberg_ex
 - Bloomberg CSVs live under `data/raw/` and are **gitignored**; they are treated as immutable and are never hand-edited.
 - Never commit `.env`, credentials, or raw market exports.
 - Genuine missing Bloomberg values remain **NULL** in the database; forward-fill happens only in feature engineering (Phase 3), never at ingest, per-ticker, past-only.
+- Macro series and static snapshot fields are validated/normalized (Phase 1) but not persisted to PostgreSQL yet — see [BUILD_PLAN.md](BUILD_PLAN.md) Phase 1's Macro / Static Persistence Note. Static fields are never attached to historical `(ticker, date)` rows.
 
 ---
 

@@ -49,12 +49,17 @@ This document defines sequencing and gates only. It restates ML/quant methodolog
 - Provision the Supabase PostgreSQL project; apply `schema.sql`; set `DATABASE_URL`.
 - Implement wide→long reshape of `prices_raw.csv` (per [ML_SPEC.md](ML_SPEC.md) §2, §4) — this reshape is the phase's highest-risk step (ticker/date misalignment) and requires an audit of the reshape logic before any load runs against the real database.
 - Implement trading-session filtering (PX_LAST-gated, §3) and NULL-preserving load of genuine missing values.
-- Load static fields (snapshot) and macro series (`SPX`, `VIX`, `USGG10YR`) per their own normalization rules.
+- Validate and normalize static fields (snapshot) and macro series (`SPX`, `VIX`, `USGG10YR`) per their own normalization rules (see the Macro / Static Persistence Note below for what "load" means for these two — it is **not** a database write in Phase 1).
 - Validate the loaded universe is exactly the 50 expected tickers (MRSH present, MMC absent).
 
 **Tests:** Reshape correctness against fixture data; trading-session filter excludes weekend/holiday rows; NULL preservation; `UNIQUE(ticker, date)` integrity; universe-membership assertion (exactly 50, correct symbols).
 
-**Acceptance criteria:** `prices_raw` populated from the real export; exactly 50 distinct tickers present; no synthetic/Yahoo data; row counts consistent with the expected trading-session count over the date range; static fields and macro series loaded.
+**Acceptance criteria:** `prices_raw` populated from the real export; exactly 50 distinct tickers present; no synthetic/Yahoo data; row counts consistent with the expected trading-session count over the date range; static fields and macro series validated/normalized per the Macro / Static Persistence Note below.
+
+**Macro / Static Persistence Note (resolved in Phase 1C):** The frozen 5-table `schema.sql` has no raw macro table and no static-fields table — `features` is Phase 3's *engineered-output* table, not a Phase 1 raw-load destination, and macro is date-only (not ticker-scoped) while static fields are a single current-day snapshot that ML_SPEC.md §10 forbids attaching to historical `(ticker, date)` rows. Accordingly, for Phase 1:
+- **Macro** (`SPX`, `VIX`, `USGG10YR`) is validated and normalized (`pipeline/normalize.py:normalize_macro`) but **not persisted** as a raw table. It is re-derived from `data/raw/macro.csv` on demand until Phase 3, where it is joined into `features` at contemporaneously-valid dates only (ML_SPEC.md §6).
+- **Static snapshot fields** (market cap, beta, dividend yield, sector) are validated and normalized (`pipeline/normalize.py:normalize_static_fields`) but **not** attached to historical `(ticker, date)` rows and **not persisted** to Postgres in Phase 1. They remain descriptive/UI-only metadata (ML_SPEC.md §10) unless a later, explicit schema decision authorizes storing them — never used as historical predictive features regardless of where they end up stored.
+- No new database table was, or should be, invented to give these an earlier destination than the frozen schema authorizes.
 
 **Stop/gate criteria:** Do not proceed to Phase 2 until the reshape/load has passed its own Integrity Audit (calendar/session errors, misaligned tickers/dates, duplicate rows — [ML_SPEC.md](ML_SPEC.md) §29).
 
