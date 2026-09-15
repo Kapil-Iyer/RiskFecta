@@ -62,6 +62,26 @@ ON CONFLICT (ticker, forecast_date) DO UPDATE SET
 # of its table); Phase 5/6 add their own narrow UPDATE SET clauses for
 # their own columns rather than widening this one.
 
+# ---------------------------------------------------------------------------
+# Phase 5A — LSTM narrow upsert (task brief §17, §20-R). Mirrors
+# PREDICTIONS_UPSERT_SQL's narrow-ON-CONFLICT discipline exactly, but for
+# `lstm_pred` instead of `xgb_pred`: on conflict, ONLY `target_date` and
+# `lstm_pred` are updated, so an LSTM upsert can never null out
+# xgb_pred/ensemble_pred/actual_return/directional_correct that Phase
+# 4/6 already wrote for the same (ticker, forecast_date) row.
+# ---------------------------------------------------------------------------
+LSTM_PRED_COL = "lstm_pred"
+
+LSTM_PREDICTIONS_UPSERT_SQL = """
+INSERT INTO predictions (
+    ticker, forecast_date, target_date, lstm_pred, xgb_pred, ensemble_pred,
+    actual_return, directional_correct
+) VALUES %s
+ON CONFLICT (ticker, forecast_date) DO UPDATE SET
+    target_date = EXCLUDED.target_date,
+    lstm_pred = EXCLUDED.lstm_pred
+"""
+
 
 def build_predictions_rows(
     eval_rows: pd.DataFrame,
@@ -93,6 +113,75 @@ def build_predictions_rows(
     out["actual_return"] = None
     out["directional_correct"] = None
     return out[PREDICTIONS_TABLE_COLUMNS]
+
+
+def build_lstm_predictions_rows(
+    eval_rows: pd.DataFrame,
+    lstm_preds: pd.Series,
+    horizon: int,
+) -> pd.DataFrame:
+    """Same shape/semantics as `build_predictions_rows`, but populates
+    `lstm_pred` instead of `xgb_pred`. `xgb_pred`/`ensemble_pred`/
+    `actual_return`/`directional_correct` are left `None` in the INSERT
+    payload — irrelevant on conflict (LSTM_PREDICTIONS_UPSERT_SQL never
+    touches them on an existing row); correctly NULL only for a genuinely
+    NEW row, where Phase 4/6 simply haven't written those columns yet.
+
+    Phase 5A NOTE (task brief §17, §21): this function is implemented and
+    mock-tested only. It is never called with real Bloomberg-derived
+    predictions, and `persist_lstm_predictions` is never called against the
+    live database, in Phase 5A.
+    """
+    out = eval_rows[[TICKER_COL, DATE_COL]].copy()
+    out = out.rename(columns={DATE_COL: FORECAST_DATE_COL})
+    if TARGET_DATE_COL in eval_rows.columns:
+        out[TARGET_DATE_COL] = eval_rows[TARGET_DATE_COL].values
+    else:
+        out[TARGET_DATE_COL] = pd.NaT
+    out[LSTM_PRED_COL] = out[TICKER_COL].map(lstm_preds)
+    out[XGB_PRED_COL] = None
+    out["ensemble_pred"] = None
+    out["actual_return"] = None
+    out["directional_correct"] = None
+    return out[PREDICTIONS_TABLE_COLUMNS]
+
+
+def upsert_lstm_predictions(conn, df: pd.DataFrame) -> int:
+    """Low-level narrow UPSERT into `predictions` touching only
+    `lstm_pred` (+ identity/`target_date`) on conflict. Does NOT commit —
+    caller controls the transaction boundary (see `persist_lstm_predictions`)."""
+    records = _prepare_predictions_for_insert(df)
+    if not records:
+        return 0
+    with conn.cursor() as cur:
+        execute_values(cur, LSTM_PREDICTIONS_UPSERT_SQL, records, page_size=1000)
+    return len(records)
+
+
+def persist_lstm_predictions(conn=None, df: Optional[pd.DataFrame] = None) -> PersistResult:
+    """Same transactional/idempotent contract as `persist_predictions`,
+    using the narrow LSTM upsert (`LSTM_PREDICTIONS_UPSERT_SQL`) so
+    existing `xgb_pred`/`actual_return`/`ensemble_pred`/
+    `directional_correct` values are always preserved.
+
+    NOT called against the live database anywhere in Phase 5A (task brief
+    §17, §21) — implemented and mock-tested only, pending the Cursor
+    Integrity Audit AND the still-open TRAIN_WINDOW/LSTM_SEQ decision gate
+    (see `pipeline.sequences` module docstring).
+    """
+    if df is None:
+        raise ValueError("persist_lstm_predictions: df is required (no default real prediction computation here)")
+    owns_conn = conn is None
+    conn = conn or db.get_connection()
+    try:
+        with conn:
+            n = upsert_lstm_predictions(conn, df)
+        with conn:
+            rows_after = db.fetch_scalar(conn, "SELECT COUNT(*) FROM predictions")
+        return PersistResult(rows_prepared=n, rows_in_table_after=int(rows_after))
+    finally:
+        if owns_conn:
+            conn.close()
 
 
 def _to_sql_value(v):
