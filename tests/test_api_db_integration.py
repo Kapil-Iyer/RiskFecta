@@ -26,10 +26,11 @@ _skip_no_db = pytest.mark.skipif(
 )
 
 # Still-empty downstream research tables the Phase 2A API must never touch.
-# `features` is intentionally omitted: Phase 3 legitimately populates it; the
-# API invariant for that table is "row count unchanged across API calls"
+# `features` (Phase 3) and `predictions` (Phase 4) are intentionally omitted:
+# both may already hold legitimate rows; the API invariant for them is
+# "row count unchanged across API calls"
 # (see test_future_phase_tables_remain_empty_after_api_use).
-EMPTY_DOWNSTREAM_TABLES = ["predictions", "portfolios", "risk_metrics"]
+EMPTY_DOWNSTREAM_TABLES = ["portfolios", "risk_metrics"]
 EXPECTED_ROW_COUNT = 62_800  # 50 tickers x 1256 valid sessions each (Phase 1A audit)
 
 
@@ -101,14 +102,15 @@ def test_market_summary_matches_known_totals(client):
 def test_future_phase_tables_remain_empty_after_api_use(client):
     """Phase 2A read-only API must not mutate later-phase research tables.
 
-    `features` may already be populated by Phase 3 — assert its row count is
-    unchanged across the API calls rather than hard-coding emptiness or a
-    fixed size. Still-unused tables (predictions/portfolios/risk_metrics)
-    must remain empty.
+    `features` (Phase 3) and `predictions` (Phase 4) may already be populated —
+    assert their row counts are unchanged across the API calls rather than
+    hard-coding emptiness or a fixed size. Still-unused tables
+    (portfolios/risk_metrics) must remain empty.
     """
     conn = db.get_connection()
     try:
         features_before = db.fetch_scalar(conn, "SELECT COUNT(*) FROM features")
+        predictions_before = db.fetch_scalar(conn, "SELECT COUNT(*) FROM predictions")
     finally:
         conn.close()
 
@@ -122,9 +124,14 @@ def test_future_phase_tables_remain_empty_after_api_use(client):
     conn = db.get_connection()
     try:
         features_after = db.fetch_scalar(conn, "SELECT COUNT(*) FROM features")
+        predictions_after = db.fetch_scalar(conn, "SELECT COUNT(*) FROM predictions")
         assert features_after == features_before, (
             f"features row count changed across Phase 2A API use "
             f"({features_before} -> {features_after})"
+        )
+        assert predictions_after == predictions_before, (
+            f"predictions row count changed across Phase 2A API use "
+            f"({predictions_before} -> {predictions_after})"
         )
         for table in EMPTY_DOWNSTREAM_TABLES:
             n = db.fetch_scalar(conn, f"SELECT COUNT(*) FROM {table}")
