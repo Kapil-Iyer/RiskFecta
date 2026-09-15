@@ -184,6 +184,88 @@ def persist_lstm_predictions(conn=None, df: Optional[pd.DataFrame] = None) -> Pe
             conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Phase 6A — ensemble narrow upsert (RiskFecta 2.0 Phase 6A task brief §12).
+# Mirrors LSTM_PREDICTIONS_UPSERT_SQL's narrow-ON-CONFLICT discipline
+# exactly, but for `ensemble_pred` instead of `lstm_pred`: on conflict,
+# ONLY `target_date` and `ensemble_pred` are updated, so an ensemble
+# upsert can never null out xgb_pred/lstm_pred/actual_return/
+# directional_correct that Phase 4/5/6-scoring already wrote for the same
+# (ticker, forecast_date) row.
+# ---------------------------------------------------------------------------
+ENSEMBLE_PRED_COL = "ensemble_pred"
+
+ENSEMBLE_PREDICTIONS_UPSERT_SQL = """
+INSERT INTO predictions (
+    ticker, forecast_date, target_date, lstm_pred, xgb_pred, ensemble_pred,
+    actual_return, directional_correct
+) VALUES %s
+ON CONFLICT (ticker, forecast_date) DO UPDATE SET
+    target_date = EXCLUDED.target_date,
+    ensemble_pred = EXCLUDED.ensemble_pred
+"""
+
+
+def build_ensemble_predictions_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """`df` must already carry `ticker`, `forecast_date`, `target_date`,
+    and `ensemble_pred` columns for the SAME (ticker, forecast_date)
+    identity already present in `predictions` (e.g.
+    `models.ensemble.build_ensemble_frame` output) — Phase 6A never
+    invents a new identity. Unlike `build_predictions_rows`/
+    `build_lstm_predictions_rows` (one fold/date at a time, so a
+    ticker-only Series lookup is unambiguous), a single ensemble call
+    spans every formation date at once, so this function reshapes an
+    already row-aligned DataFrame directly rather than mapping a
+    ticker-keyed Series (which would collide across dates).
+    """
+    out = df[[TICKER_COL, FORECAST_DATE_COL, TARGET_DATE_COL, ENSEMBLE_PRED_COL]].copy()
+    out["lstm_pred"] = None
+    out[XGB_PRED_COL] = None
+    out["actual_return"] = None
+    out["directional_correct"] = None
+    return out[PREDICTIONS_TABLE_COLUMNS]
+
+
+def upsert_ensemble_predictions(conn, df: pd.DataFrame) -> int:
+    """Low-level narrow UPSERT into `predictions` touching only
+    `ensemble_pred` (+ identity/`target_date`) on conflict. Does NOT
+    commit — caller controls the transaction boundary (see
+    `persist_ensemble_predictions`)."""
+    records = _prepare_predictions_for_insert(df)
+    if not records:
+        return 0
+    with conn.cursor() as cur:
+        execute_values(cur, ENSEMBLE_PREDICTIONS_UPSERT_SQL, records, page_size=1000)
+    return len(records)
+
+
+def persist_ensemble_predictions(conn=None, df: Optional[pd.DataFrame] = None) -> PersistResult:
+    """Same transactional/idempotent contract as `persist_predictions`/
+    `persist_lstm_predictions`, using the narrow ensemble upsert
+    (`ENSEMBLE_PREDICTIONS_UPSERT_SQL`) so existing `xgb_pred`/
+    `lstm_pred`/`actual_return`/`directional_correct` values are always
+    preserved.
+
+    NOT called against the live database anywhere in Phase 6A (task brief
+    §12, §21) — implemented and mock-tested only, pending the Cursor
+    Integrity Audit and explicit real-execution approval. Real
+    `predictions.ensemble_pred` must remain entirely NULL until then.
+    """
+    if df is None:
+        raise ValueError("persist_ensemble_predictions: df is required (no default real prediction computation here)")
+    owns_conn = conn is None
+    conn = conn or db.get_connection()
+    try:
+        with conn:
+            n = upsert_ensemble_predictions(conn, df)
+        with conn:
+            rows_after = db.fetch_scalar(conn, "SELECT COUNT(*) FROM predictions")
+        return PersistResult(rows_prepared=n, rows_in_table_after=int(rows_after))
+    finally:
+        if owns_conn:
+            conn.close()
+
+
 def _to_sql_value(v):
     """Same NaN/NaT/None -> SQL NULL normalization as pipeline.features._to_sql_value."""
     if v is None:
