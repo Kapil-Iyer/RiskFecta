@@ -13,7 +13,7 @@ export default function DataFreshnessBanner({ lastDate }: DataFreshnessBannerPro
     <div className="freshness-banner" role="note">
       <strong>Historical data through {asOf}</strong>
       <span aria-hidden="true"> · </span>
-      <span>Model forecasts in development</span>
+      <span>Historical walk-forward research — not live or current-day data</span>
     </div>
   );
 }

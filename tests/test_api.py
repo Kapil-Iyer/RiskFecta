@@ -10,6 +10,7 @@ unset (e.g. in CI).
 from __future__ import annotations
 
 import pathlib
+import re
 from datetime import date
 
 import psycopg2
@@ -19,6 +20,8 @@ from fastapi.testclient import TestClient
 import config
 from app.db import get_db
 from app.main import app
+
+_SQL_MUTATION_KEYWORDS = re.compile(r"\b(insert\s+into|update\s+\w+\s+set|delete\s+from|drop\s+table|truncate|alter\s+table)\b")
 
 
 class _FakeCursor:
@@ -204,12 +207,123 @@ def test_no_credential_leakage_on_db_failure(client):
 
 
 # ---------------------------------------------------------------------------
-# Future-phase tables must never be referenced by Phase 2A app code
+# Predictions (Phase 4-6 frozen walk-forward forecasts — Phase 8B)
 # ---------------------------------------------------------------------------
-def test_future_phase_tables_never_referenced_in_app_code():
-    forbidden_tables = ["features", "predictions", "portfolios", "risk_metrics"]
+PREDICTION_ROWS = [
+    ("AAPL", date(2022, 3, 25), 0.03, 0.05, 0.04, 0.06, True),
+    ("MSFT", date(2022, 3, 25), -0.01, 0.02, 0.005, -0.02, False),
+    ("NVDA", date(2022, 3, 25), 0.08, 0.07, 0.075, 0.09, True),
+]
+
+
+def test_prediction_dates_returns_list_of_dates(client):
+    rows = [(date(2022, 2, 25),), (date(2022, 3, 28),), (date(2026, 1, 2),)]
+    app.dependency_overrides[get_db] = _get_db_returning(rows)
+    resp = client.get("/api/predictions/dates")
+    assert resp.status_code == 200
+    assert resp.json() == ["2022-02-25", "2022-03-28", "2026-01-02"]
+
+
+def test_predictions_explicit_formation_date_returns_all_model_fields(client):
+    app.dependency_overrides[get_db] = _get_db_returning(PREDICTION_ROWS)
+    resp = client.get("/api/predictions", params={"formation_date": "2022-02-25"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["formation_date"] == "2022-02-25"
+    assert body["target_date"] == "2022-03-25"
+    assert body["count"] == 3
+    for row in body["predictions"]:
+        for field in ("ticker", "xgb_pred", "lstm_pred", "ensemble_pred", "actual_return", "directional_correct"):
+            assert field in row
+
+
+def test_predictions_unknown_formation_date_returns_404(client):
+    app.dependency_overrides[get_db] = _get_db_returning([])
+    resp = client.get("/api/predictions", params={"formation_date": "2099-01-01"})
+    assert resp.status_code == 404
+
+
+def test_predictions_malformed_formation_date_returns_422(client):
+    resp = client.get("/api/predictions", params={"formation_date": "not-a-date"})
+    assert resp.status_code == 422
+
+
+class _FakeCursorDefaultDate:
+    """Distinguishes the MAX(forecast_date) lookup from the cross-section
+    SELECT within one request — the shared `_FakeCursor` above returns the
+    same fixed rows for every call, which can't model this two-query path."""
+
+    def __init__(self, max_date, cross_section_rows):
+        self._max_date = max_date
+        self._cross_section_rows = cross_section_rows
+
+    def execute(self, sql, params=None):
+        pass
+
+    def fetchone(self):
+        return (self._max_date,)
+
+    def fetchall(self):
+        return self._cross_section_rows
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+class _FakeConnDefaultDate:
+    def __init__(self, max_date, cross_section_rows):
+        self._cursor = _FakeCursorDefaultDate(max_date, cross_section_rows)
+
+    def cursor(self):
+        return self._cursor
+
+    def close(self):
+        pass
+
+
+def test_predictions_defaults_to_latest_formation_date_when_omitted(client):
+    def _fake_get_db():
+        yield _FakeConnDefaultDate(date(2026, 1, 2), PREDICTION_ROWS)
+
+    app.dependency_overrides[get_db] = _fake_get_db
+    resp = client.get("/api/predictions")
+    assert resp.status_code == 200
+    assert resp.json()["formation_date"] == "2026-01-02"
+
+
+# Note: deterministic base ordering (`ORDER BY ticker ASC`) is a real-SQL
+# guarantee that a mocked cursor can't meaningfully verify (it returns
+# whatever rows it's given, regardless of the query text) — it's covered by
+# the live-DB test in test_api_db_integration.py, and separately by a pure
+# unit test of the frontend's client-side ranking function
+# (frontend/src/pages/forecastRanking.test.ts).
+
+
+# ---------------------------------------------------------------------------
+# Research API is read-only: no mutating SQL keyword anywhere in app/routes/
+# ---------------------------------------------------------------------------
+def test_research_routes_never_issue_mutating_sql():
+    routes_dir = pathlib.Path(__file__).resolve().parent.parent / "app" / "routes"
+    for path in routes_dir.glob("*.py"):
+        text = path.read_text().lower()
+        assert not _SQL_MUTATION_KEYWORDS.search(text), f"{path} appears to contain mutating SQL"
+
+
+# ---------------------------------------------------------------------------
+# Not-yet-authorized research tables must still never be referenced in app/
+# code. `predictions` was authorized for Phase 8B (Forecast Rankings) and is
+# deliberately removed from this list — see app/routes/predictions.py.
+# `features`, `portfolios`, and `risk_metrics` remain unauthorized until
+# their own future Phase 8 slices (Model Comparison, Portfolio Construction,
+# Efficient Frontier, Risk Analytics, Historical Evidence).
+# ---------------------------------------------------------------------------
+def test_unauthorized_future_phase_tables_never_referenced_in_app_code():
+    forbidden_tables = ["features", "portfolios", "risk_metrics"]
     app_dir = pathlib.Path(__file__).resolve().parent.parent / "app"
     for path in app_dir.rglob("*.py"):
         text = path.read_text().lower()
         for table in forbidden_tables:
-            assert table not in text, f"{path} references future-phase table '{table}'"
+            assert table not in text, f"{path} references not-yet-authorized table '{table}'"

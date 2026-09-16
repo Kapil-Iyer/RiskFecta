@@ -88,8 +88,10 @@ describe("App routing shell", () => {
     await user.click(screen.getByRole("link", { name: "Methodology" }));
     expect(await screen.findByRole("heading", { name: /Methodology & roadmap/ })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("link", { name: "Forecast Rankings" }));
-    expect(await screen.findByRole("heading", { name: "Forecast Rankings" })).toBeInTheDocument();
+    // Model Comparison is still a not-yet-built Coming Soon surface (Forecast
+    // Rankings has its own dedicated test suite in pages/ForecastRankingsPage.test.tsx).
+    await user.click(screen.getByRole("link", { name: "Model Comparison" }));
+    expect(await screen.findByRole("heading", { name: "Model Comparison" })).toBeInTheDocument();
     // A not-yet-built surface must never show fabricated numbers/charts.
     expect(document.querySelector(".chart")).not.toBeInTheDocument();
     expect(screen.getByText(/not yet implemented/)).toBeInTheDocument();

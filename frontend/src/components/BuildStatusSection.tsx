@@ -14,13 +14,16 @@ const STATUS_ITEMS: StatusItem[] = [
   },
   {
     label: "Model forecasts",
-    state: "planned",
-    detail: "Pooled XGBoost + LSTM ensemble — not yet trained. No predictions exist.",
+    state: "live",
+    detail:
+      "Pooled XGBoost + LSTM ensemble — frozen historical walk-forward forecasts (Phase 4–6). See Forecast Rankings.",
   },
   {
     label: "Portfolio optimization",
     state: "planned",
-    detail: "Constrained mean-variance optimization + Efficient Frontier — not yet built.",
+    detail:
+      "Constrained mean-variance optimization is complete in the research pipeline (Phase 7); the Portfolio " +
+      "Construction, Efficient Frontier, and Risk Analytics dashboard pages are still in progress.",
   },
 ];
 

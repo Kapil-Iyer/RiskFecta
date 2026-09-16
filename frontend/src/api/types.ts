@@ -47,3 +47,30 @@ export interface MarketSummaryResponse {
   first_date: string | null;
   last_date: string | null;
 }
+
+/**
+ * One ticker's forecast cross-section at a formation date — frozen Phase
+ * 4-6 historical walk-forward evidence, never a live/current forecast.
+ * `actual_return`/`directional_correct` are ex-post EVALUATION fields,
+ * filled in only after the 21-session target_date passed — they were not
+ * available at formation time. See ForecastRankingsPage's explicit
+ * "Show realized outcome" control before rendering either field.
+ */
+export interface PredictionRow {
+  ticker: string;
+  xgb_pred: number | null;
+  lstm_pred: number | null;
+  ensemble_pred: number | null;
+  actual_return: number | null;
+  directional_correct: boolean | null;
+}
+
+/** Full body of GET /api/predictions. */
+export interface PredictionCrossSectionResponse {
+  formation_date: string; // ISO date, e.g. "2022-02-25"
+  target_date: string; // formation_date + 21 valid trading sessions
+  count: number;
+  /** Base order is deterministic (ticker ascending) — ranking by a chosen
+   * model is done client-side, see pages/forecastRanking.ts. */
+  predictions: PredictionRow[];
+}

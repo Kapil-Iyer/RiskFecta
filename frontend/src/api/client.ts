@@ -8,6 +8,7 @@
 import type {
   HealthResponse,
   MarketSummaryResponse,
+  PredictionCrossSectionResponse,
   PriceHistoryResponse,
   ReadinessResponse,
   UniverseTicker,
@@ -88,4 +89,17 @@ export function getPrices(
 
 export function getMarketSummary(): Promise<MarketSummaryResponse> {
   return request<MarketSummaryResponse>("/api/market/summary");
+}
+
+/** All historical walk-forward formation dates with persisted forecasts
+ * (the frozen Phase 4-6 calendar), ascending. */
+export function getPredictionDates(): Promise<string[]> {
+  return request<string[]>("/api/predictions/dates");
+}
+
+/** The 50-ticker forecast cross-section for a formation date. Omit
+ * `formationDate` to get the latest available — never a live forecast,
+ * just the most recent frozen historical one. */
+export function getPredictions(formationDate?: string): Promise<PredictionCrossSectionResponse> {
+  return request<PredictionCrossSectionResponse>("/api/predictions", { formation_date: formationDate });
 }

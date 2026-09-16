@@ -25,16 +25,23 @@ _skip_no_db = pytest.mark.skipif(
     reason="DATABASE_URL not set in the environment (expected in CI / clean checkouts)",
 )
 
-# Downstream research tables the Phase 2A read-only API must never mutate.
+# Downstream research tables the read-only API must never mutate.
 # `features` (Phase 3) and `predictions` (Phase 4) were already populated
 # even at Phase 2A. `portfolios`/`risk_metrics` (Phase 7) were empty when
 # this test was first written but now legitimately hold the official,
 # frozen Phase 7B experiment (11,500 / 685 rows) — so, like
 # features/predictions, the invariant is "row count unchanged across API
 # calls", never a hard-coded emptiness assumption
-# (see test_future_phase_tables_remain_unchanged_after_api_use).
+# (see test_future_phase_tables_remain_unchanged_after_api_use). Phase 8B
+# adds real GET endpoints over `predictions` (see test_prediction_* below) —
+# that table's row count must still never change from ordinary API reads.
 UNCHANGED_DOWNSTREAM_TABLES = ["features", "predictions", "portfolios", "risk_metrics"]
 EXPECTED_ROW_COUNT = 62_800  # 50 tickers x 1256 valid sessions each (Phase 1A audit)
+
+# Frozen Phase 4-6 forecasting calendar (BUILD_PLAN.md Phase 4-6, ML_SPEC.md §23).
+EXPECTED_PREDICTION_DATE_COUNT = 47
+EXPECTED_FIRST_FORMATION_DATE = "2022-02-25"
+EXPECTED_LAST_FORMATION_DATE = "2026-01-02"
 
 
 @pytest.fixture
@@ -102,6 +109,54 @@ def test_market_summary_matches_known_totals(client):
 
 
 @_skip_no_db
+def test_prediction_dates_returns_all_47_frozen_formations(client):
+    resp = client.get("/api/predictions/dates")
+    assert resp.status_code == 200
+    dates = resp.json()
+    assert len(dates) == EXPECTED_PREDICTION_DATE_COUNT
+    assert dates[0] == EXPECTED_FIRST_FORMATION_DATE
+    assert dates[-1] == EXPECTED_LAST_FORMATION_DATE
+    assert dates == sorted(dates)
+
+
+@_skip_no_db
+def test_predictions_default_returns_latest_formation_with_50_tickers(client):
+    resp = client.get("/api/predictions")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["formation_date"] == EXPECTED_LAST_FORMATION_DATE
+    assert body["count"] == 50
+    assert len(body["predictions"]) == 50
+    tickers = [row["ticker"] for row in body["predictions"]]
+    assert tickers == sorted(tickers)  # base order is deterministic: ticker ascending
+    assert set(tickers) == set(config.TICKER_UNIVERSE)
+
+
+@_skip_no_db
+def test_predictions_specific_formation_returns_50_rows_with_all_models(client):
+    # First covariance-eligible Phase 7 formation — a real, known-valid date.
+    resp = client.get("/api/predictions", params={"formation_date": "2022-03-28"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["formation_date"] == "2022-03-28"
+    assert body["count"] == 50
+    for row in body["predictions"]:
+        assert row["xgb_pred"] is not None
+        assert row["lstm_pred"] is not None
+        assert row["ensemble_pred"] is not None
+        # 21 sessions after 2022-03-28 is well before the 2026-02-27 data
+        # cutoff, so the realized outcome should already be evaluated.
+        assert row["actual_return"] is not None
+        assert row["directional_correct"] is not None
+
+
+@_skip_no_db
+def test_predictions_unknown_formation_date_returns_404(client):
+    resp = client.get("/api/predictions", params={"formation_date": "2099-01-01"})
+    assert resp.status_code == 404
+
+
+@_skip_no_db
 def test_future_phase_tables_remain_unchanged_after_api_use(client):
     """Phase 2A read-only API must not mutate later-phase research tables.
 
@@ -123,6 +178,9 @@ def test_future_phase_tables_remain_unchanged_after_api_use(client):
     client.get("/api/prices/AAPL")
     client.get("/api/prices/AAPL", params={"start": "2025-01-01", "end": "2025-01-31"})
     client.get("/api/market/summary")
+    client.get("/api/predictions/dates")
+    client.get("/api/predictions")
+    client.get("/api/predictions", params={"formation_date": "2022-03-28"})
 
     conn = db.get_connection()
     try:

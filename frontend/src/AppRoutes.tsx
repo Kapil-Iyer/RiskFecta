@@ -2,6 +2,7 @@ import { Route, Routes } from "react-router-dom";
 import AppShell from "./AppShell";
 import OverviewPage from "./pages/OverviewPage";
 import UniversePage from "./pages/UniversePage";
+import ForecastRankingsPage from "./pages/ForecastRankingsPage";
 import MethodologyPage from "./pages/MethodologyPage";
 import ComingSoonPage from "./pages/ComingSoonPage";
 
@@ -14,15 +15,7 @@ export default function AppRoutes() {
       <Route element={<AppShell />}>
         <Route path="/" element={<OverviewPage />} />
         <Route path="/universe" element={<UniversePage />} />
-        <Route
-          path="/forecasts"
-          element={
-            <ComingSoonPage
-              title="Forecast Rankings"
-              description="XGBoost, LSTM, and ensemble forward-return forecasts for the current formation date, ranked."
-            />
-          }
-        />
+        <Route path="/forecasts" element={<ForecastRankingsPage />} />
         <Route
           path="/models"
           element={
