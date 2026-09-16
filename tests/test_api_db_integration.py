@@ -157,6 +157,77 @@ def test_predictions_unknown_formation_date_returns_404(client):
 
 
 @_skip_no_db
+def test_model_comparison_returns_six_models_with_correct_provenance(client):
+    resp = client.get("/api/models/comparison")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["fold_count"] == EXPECTED_PREDICTION_DATE_COUNT
+    assert body["prediction_count"] == 2350
+    assert body["formation_date_start"] == EXPECTED_FIRST_FORMATION_DATE
+    assert body["formation_date_end"] == EXPECTED_LAST_FORMATION_DATE
+
+    models_by_key = {m["model"]: m for m in body["models"]}
+    assert set(models_by_key) == {"historical_mean", "momentum_3m", "ridge", "xgb_pred", "lstm_pred", "ensemble_pred"}
+    for key in ("historical_mean", "momentum_3m", "ridge"):
+        assert models_by_key[key]["source"] == "frozen_baseline_constant"
+        assert models_by_key[key]["n_obs"] == 2350
+    for key in ("xgb_pred", "lstm_pred", "ensemble_pred"):
+        assert models_by_key[key]["source"] == "computed_from_persisted_predictions"
+        assert models_by_key[key]["n_obs"] == 2350
+
+
+@_skip_no_db
+def test_model_comparison_baseline_values_match_frozen_constants(client):
+    from models.frozen_phase4_baselines import FROZEN_BASELINE_RESULTS
+
+    resp = client.get("/api/models/comparison")
+    models_by_key = {m["model"]: m for m in resp.json()["models"]}
+    for expected in FROZEN_BASELINE_RESULTS:
+        actual = models_by_key[expected.model]
+        assert actual["mae"] == expected.mae
+        assert actual["rmse"] == expected.rmse
+        assert actual["directional_accuracy"] == expected.directional_accuracy
+        assert actual["pearson_corr"] == expected.pearson_corr
+        assert actual["spearman_corr"] == expected.spearman_corr
+
+
+@_skip_no_db
+def test_model_comparison_ml_metrics_reproduce_authoritative_phase6_results(client):
+    """Independently confirms the live route (recomputing from persisted
+    `predictions` via the frozen evaluation code) reproduces the
+    authoritative, already-established Phase 6 walk-forward results —
+    validation of an existing frozen result, never a new experiment. A
+    mismatch here is an integrity issue to investigate, not something to
+    silently reconcile by editing either side."""
+    # Authoritative Phase 6 historical walk-forward OOS results (47 dates,
+    # 2,350 predictions) — independently confirmed to 5 decimal places
+    # against a fresh recomputation from `predictions` before this route
+    # was written (see the Phase 8B implementation report).
+    expected = {
+        "xgb_pred": dict(mae=0.07915, rmse=0.10453, directional_accuracy=0.4996, pearson_corr=0.07105, spearman_corr=0.00007),
+        "lstm_pred": dict(mae=0.08156, rmse=0.11030, directional_accuracy=0.5085, pearson_corr=0.02197, spearman_corr=0.00805),
+        "ensemble_pred": dict(mae=0.07717, rmse=0.10292, directional_accuracy=0.50724, pearson_corr=0.05479, spearman_corr=0.01721),
+    }
+    resp = client.get("/api/models/comparison")
+    models_by_key = {m["model"]: m for m in resp.json()["models"]}
+    for model, metrics in expected.items():
+        actual = models_by_key[model]
+        for metric, value in metrics.items():
+            assert abs(actual[metric] - value) < 1e-4, f"{model}.{metric}: {actual[metric]} vs frozen {value}"
+
+
+@_skip_no_db
+def test_model_comparison_disagreement_matches_phase6_diagnostics(client):
+    resp = client.get("/api/models/comparison")
+    disagreement = resp.json()["disagreement"]
+    assert disagreement is not None
+    assert disagreement["n_total"] == 2350
+    assert disagreement["n_disagree"] == 773
+    assert abs(disagreement["xgb_lstm_pred_pearson"] - 0.341) < 1e-2
+    assert abs(disagreement["residual_pearson"] - 0.834) < 1e-2
+
+
+@_skip_no_db
 def test_future_phase_tables_remain_unchanged_after_api_use(client):
     """Phase 2A read-only API must not mutate later-phase research tables.
 
@@ -181,6 +252,7 @@ def test_future_phase_tables_remain_unchanged_after_api_use(client):
     client.get("/api/predictions/dates")
     client.get("/api/predictions")
     client.get("/api/predictions", params={"formation_date": "2022-03-28"})
+    client.get("/api/models/comparison")
 
     conn = db.get_connection()
     try:

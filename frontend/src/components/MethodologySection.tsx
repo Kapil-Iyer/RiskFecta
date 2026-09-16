@@ -12,23 +12,27 @@ export default function MethodologySection() {
       <h3>Research pipeline status</h3>
       <ol className="roadmap-list">
         <li>
-          <strong>Feature engineering</strong> <span className="tag tag--planned">planned</span> —
-          leakage-safe technical indicators and macro alignment, backward-looking only.
+          <strong>Feature engineering</strong> <span className="tag tag--research">research complete</span> —
+          leakage-safe technical indicators and macro alignment, backward-looking only (Phase 3).
+          Feeds every model below; has no dedicated page of its own.
         </li>
         <li>
           <strong>XGBoost + LSTM ensemble</strong> <span className="tag tag--live">live</span> —
           pooled models forecasting 21-trading-session forward returns, evaluated under
-          walk-forward (never random) splits. See Forecast Rankings.
+          walk-forward (never random) splits. See Forecast Rankings and Model Comparison.
         </li>
         <li>
           <strong>Covariance &amp; risk estimation</strong>{" "}
-          <span className="tag tag--planned">planned</span> — historical-realized-return
-          covariance (sample vs. Ledoit-Wolf shrinkage).
+          <span className="tag tag--research">research complete</span> — historical-realized-return
+          covariance (sample vs. Ledoit-Wolf shrinkage), complete in the research pipeline
+          (Phase 7). The Risk Analytics dashboard page is not yet built.
         </li>
         <li>
           <strong>Constrained portfolio optimization</strong>{" "}
-          <span className="tag tag--planned">planned</span> — long-only mean-variance
-          optimization producing an Efficient Frontier.
+          <span className="tag tag--research">research complete</span> — long-only mean-variance
+          optimization producing an Efficient Frontier, complete in the research pipeline
+          (Phase 7). The Portfolio Construction and Efficient Frontier dashboard pages are not
+          yet built.
         </li>
       </ol>
 

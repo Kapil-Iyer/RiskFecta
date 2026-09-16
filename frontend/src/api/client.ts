@@ -8,6 +8,7 @@
 import type {
   HealthResponse,
   MarketSummaryResponse,
+  ModelComparisonResponse,
   PredictionCrossSectionResponse,
   PriceHistoryResponse,
   ReadinessResponse,
@@ -102,4 +103,11 @@ export function getPredictionDates(): Promise<string[]> {
  * just the most recent frozen historical one. */
 export function getPredictions(formationDate?: string): Promise<PredictionCrossSectionResponse> {
   return request<PredictionCrossSectionResponse>("/api/predictions", { formation_date: formationDate });
+}
+
+/** Frozen Phase 4-6 historical walk-forward model comparison — baselines,
+ * XGBoost, LSTM, and Ensemble evaluated over the same 47-formation-date
+ * experiment. Never a live/current model score. */
+export function getModelComparison(): Promise<ModelComparisonResponse> {
+  return request<ModelComparisonResponse>("/api/models/comparison");
 }

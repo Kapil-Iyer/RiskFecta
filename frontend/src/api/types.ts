@@ -74,3 +74,53 @@ export interface PredictionCrossSectionResponse {
    * model is done client-side, see pages/forecastRanking.ts. */
   predictions: PredictionRow[];
 }
+
+/**
+ * One model/baseline's historical walk-forward OOS metrics (frozen Phase
+ * 4-6 evaluation). `source` says exactly how the backend obtained this row
+ * — "frozen_baseline_constant" (Historical Mean/Momentum 3M/Ridge, never
+ * persisted, exposed from a frozen research-result artifact) or
+ * "computed_from_persisted_predictions" (XGBoost/LSTM/Ensemble, recomputed
+ * from the real `predictions` table on every request).
+ */
+export interface ModelMetricRow {
+  model: string;
+  label: string;
+  source: "frozen_baseline_constant" | "computed_from_persisted_predictions";
+  mae: number;
+  rmse: number;
+  directional_accuracy: number;
+  pearson_corr: number;
+  spearman_corr: number;
+  n_obs: number;
+}
+
+export interface MetricDefinition {
+  key: "mae" | "rmse" | "directional_accuracy" | "pearson_corr" | "spearman_corr";
+  label: string;
+  direction: "lower_is_better" | "higher_is_better" | "context_dependent";
+  description: string;
+}
+
+export interface ModelDisagreementSummary {
+  source: string;
+  xgb_lstm_pred_pearson: number;
+  xgb_lstm_pred_spearman: number;
+  residual_pearson: number;
+  residual_spearman: number;
+  n_disagree: number;
+  n_total: number;
+}
+
+/** Full body of GET /api/models/comparison. */
+export interface ModelComparisonResponse {
+  experiment_type: string;
+  target_horizon_sessions: number;
+  fold_count: number;
+  prediction_count: number;
+  formation_date_start: string;
+  formation_date_end: string;
+  models: ModelMetricRow[];
+  metric_definitions: MetricDefinition[];
+  disagreement: ModelDisagreementSummary | null;
+}

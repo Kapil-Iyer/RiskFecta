@@ -50,6 +50,7 @@ export default function PlotlyChart({ data, layout, config, className, ariaLabel
 
     import("plotly.js-cartesian-dist-min").then((mod) => {
       if (generationRef.current !== myGeneration) return; // superseded before Plotly finished loading
+      if (!el.isConnected) return; // unmounted while the dynamic import was in flight
       const Plotly = mod.default;
       void Plotly.react(el, data, layout ?? {}, { ...DEFAULT_CONFIG, ...config });
 

@@ -3,6 +3,7 @@ import AppShell from "./AppShell";
 import OverviewPage from "./pages/OverviewPage";
 import UniversePage from "./pages/UniversePage";
 import ForecastRankingsPage from "./pages/ForecastRankingsPage";
+import ModelComparisonPage from "./pages/ModelComparisonPage";
 import MethodologyPage from "./pages/MethodologyPage";
 import ComingSoonPage from "./pages/ComingSoonPage";
 
@@ -16,15 +17,7 @@ export default function AppRoutes() {
         <Route path="/" element={<OverviewPage />} />
         <Route path="/universe" element={<UniversePage />} />
         <Route path="/forecasts" element={<ForecastRankingsPage />} />
-        <Route
-          path="/models"
-          element={
-            <ComingSoonPage
-              title="Model Comparison"
-              description="Walk-forward out-of-sample evidence across baselines, XGBoost, LSTM, and the ensemble."
-            />
-          }
-        />
+        <Route path="/models" element={<ModelComparisonPage />} />
         <Route
           path="/portfolio"
           element={

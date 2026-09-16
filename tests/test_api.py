@@ -13,6 +13,7 @@ import pathlib
 import re
 from datetime import date
 
+import pandas as pd
 import psycopg2
 import pytest
 from fastapi.testclient import TestClient
@@ -300,6 +301,76 @@ def test_predictions_defaults_to_latest_formation_date_when_omitted(client):
 # the live-DB test in test_api_db_integration.py, and separately by a pure
 # unit test of the frontend's client-side ranking function
 # (frontend/src/pages/forecastRanking.test.ts).
+
+
+# ---------------------------------------------------------------------------
+# Model comparison (Phase 4-6 frozen historical evaluation — Phase 8B)
+# ---------------------------------------------------------------------------
+def _synthetic_aligned_predictions() -> pd.DataFrame:
+    """A tiny, hand-computable stand-in for `load_aligned_predictions`'s
+    real (2,350-row) output — this test exercises the ROUTE's wiring
+    (provenance labels, metadata, schema), not metric arithmetic, which is
+    already covered by tests/test_metrics.py and tests/test_ensemble.py."""
+    return pd.DataFrame(
+        {
+            "ticker": ["AAPL", "MSFT", "AAPL", "MSFT"],
+            "forecast_date": pd.to_datetime(["2022-02-25", "2022-02-25", "2022-03-28", "2022-03-28"]),
+            "target_date": pd.to_datetime(["2022-03-25", "2022-03-25", "2022-04-27", "2022-04-27"]),
+            "xgb_pred": [0.01, -0.02, 0.03, 0.00],
+            "lstm_pred": [0.02, -0.01, 0.01, 0.02],
+            "actual_return": [0.015, -0.01, 0.02, -0.01],
+            "directional_correct": [True, True, True, False],
+        }
+    )
+
+
+def test_model_comparison_shape_and_provenance(client, monkeypatch):
+    import app.routes.models as models_route
+
+    monkeypatch.setattr(models_route, "load_aligned_predictions", lambda conn: _synthetic_aligned_predictions())
+    app.dependency_overrides[get_db] = _get_db_returning([])  # unused by the monkeypatched loader
+
+    resp = client.get("/api/models/comparison")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["experiment_type"] == "historical_walk_forward_oos"
+    assert body["target_horizon_sessions"] == 21
+    assert body["fold_count"] == 2
+    assert body["prediction_count"] == 4
+    assert body["formation_date_start"] == "2022-02-25"
+    assert body["formation_date_end"] == "2022-03-28"
+
+    models_by_key = {m["model"]: m for m in body["models"]}
+    assert set(models_by_key) == {"historical_mean", "momentum_3m", "ridge", "xgb_pred", "lstm_pred", "ensemble_pred"}
+    for key in ("historical_mean", "momentum_3m", "ridge"):
+        assert models_by_key[key]["source"] == "frozen_baseline_constant"
+    for key in ("xgb_pred", "lstm_pred", "ensemble_pred"):
+        assert models_by_key[key]["source"] == "computed_from_persisted_predictions"
+
+    # Frozen baseline values are the exact authoritative constants, never derived.
+    assert models_by_key["historical_mean"]["mae"] == 0.07312
+    assert models_by_key["momentum_3m"]["directional_accuracy"] == 0.5077
+    assert models_by_key["ridge"]["spearman_corr"] == -0.03153
+
+    metric_keys = {m["key"] for m in body["metric_definitions"]}
+    assert metric_keys == {"mae", "rmse", "directional_accuracy", "pearson_corr", "spearman_corr"}
+    directions = {m["key"]: m["direction"] for m in body["metric_definitions"]}
+    assert directions["mae"] == "lower_is_better"
+    assert directions["rmse"] == "lower_is_better"
+    assert directions["directional_accuracy"] == "higher_is_better"
+
+    assert body["disagreement"]["source"] == "computed_from_persisted_predictions"
+    assert body["disagreement"]["n_total"] == 4
+
+
+def test_model_comparison_no_overall_winner_field():
+    """The response must never carry a single ranked/"best model" field —
+    the evidence is metric-mixed by design (§5)."""
+    import app.schemas as schemas
+
+    field_names = set(schemas.ModelComparisonResponse.model_fields.keys())
+    assert not field_names & {"best_model", "winner", "overall_score", "overall_rank"}
 
 
 # ---------------------------------------------------------------------------

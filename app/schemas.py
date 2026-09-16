@@ -82,3 +82,59 @@ class PredictionCrossSectionResponse(BaseModel):
     # app/routes/predictions.py. Ranking by a chosen model is a client-side
     # concern, not an API parameter.
     predictions: List[PredictionRow]
+
+
+class ModelMetricRow(BaseModel):
+    """One model/baseline's historical walk-forward OOS metrics.
+
+    `source` distinguishes how this row was obtained — never left implicit:
+    - "frozen_baseline_constant": Historical Mean / Momentum 3M / Ridge —
+      baseline forecasts are not persisted, so these are a frozen research
+      artifact (models/frozen_phase4_baselines.py), not a live computation.
+    - "computed_from_persisted_predictions": XGBoost / LSTM / Ensemble —
+      recomputed on each request from the real `predictions` table using
+      the frozen evaluation code (models/metrics.py, models/ensemble.py).
+    """
+
+    model: str
+    label: str
+    source: str
+    mae: float
+    rmse: float
+    directional_accuracy: float
+    pearson_corr: float
+    spearman_corr: float
+    n_obs: int
+
+
+class MetricDefinition(BaseModel):
+    key: str
+    label: str
+    direction: str  # "lower_is_better" | "higher_is_better" | "context_dependent"
+    description: str
+
+
+class ModelDisagreementSummary(BaseModel):
+    """Optional XGBoost/LSTM disagreement diagnostics (ML_SPEC.md/Phase 6A
+    task brief) — recomputed from persisted predictions, same provenance
+    rule as the ML model rows above."""
+
+    source: str
+    xgb_lstm_pred_pearson: float
+    xgb_lstm_pred_spearman: float
+    residual_pearson: float
+    residual_spearman: float
+    n_disagree: int
+    n_total: int
+
+
+class ModelComparisonResponse(BaseModel):
+    experiment_type: str
+    target_horizon_sessions: int
+    fold_count: int
+    prediction_count: int
+    formation_date_start: date
+    formation_date_end: date
+    models: List[ModelMetricRow]
+    metric_definitions: List[MetricDefinition]
+    disagreement: Optional[ModelDisagreementSummary] = None

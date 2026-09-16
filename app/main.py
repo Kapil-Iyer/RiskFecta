@@ -26,7 +26,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.routes import health, market, predictions, prices, universe
+from app.routes import health, market, models, predictions, prices, universe
 
 app = FastAPI(
     title="RiskFecta API",
@@ -72,3 +72,4 @@ app.include_router(universe.router)
 app.include_router(prices.router)
 app.include_router(market.router)
 app.include_router(predictions.router)
+app.include_router(models.router)
