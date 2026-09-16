@@ -1,6 +1,8 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
-import App from "./App";
+import AppRoutes from "./AppRoutes";
 import * as client from "./api/client";
 
 vi.mock("./api/client", async () => {
@@ -14,8 +16,16 @@ vi.mock("./api/client", async () => {
   };
 });
 
-describe("App", () => {
-  it("renders the RiskFecta shell and market summary from mocked API data", async () => {
+function renderAt(path: string) {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <AppRoutes />
+    </MemoryRouter>,
+  );
+}
+
+describe("App routing shell", () => {
+  it("renders the RiskFecta shell, nav, and universe data on /universe", async () => {
     vi.mocked(client.getMarketSummary).mockResolvedValue({
       ticker_count: 50,
       price_row_count: 62800,
@@ -25,24 +35,26 @@ describe("App", () => {
     vi.mocked(client.getUniverse).mockResolvedValue([{ ticker: "AAPL", sector: "Information Technology" }]);
     vi.mocked(client.getReadiness).mockResolvedValue({ status: "ok", database: "connected" });
 
-    render(<App />);
+    renderAt("/universe");
 
+    // Shell chrome (persistent across routes).
     expect(screen.getByRole("heading", { name: "RiskFecta" })).toBeInTheDocument();
     expect(screen.getByText("Quantitative Portfolio Intelligence Platform")).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Research surfaces" })).toBeInTheDocument();
 
+    // Universe-page content.
     await waitFor(() => expect(screen.getByText("62,800")).toBeInTheDocument());
     expect(screen.getByText("2026-02-27")).toBeInTheDocument();
     expect(screen.getByText("AAPL")).toBeInTheDocument();
 
     // Data-freshness banner is present and honest about the cutoff.
     expect(screen.getByText(/Historical data through/)).toBeInTheDocument();
-    expect(screen.getByText(/Model forecasts in development/)).toBeInTheDocument();
 
     // Backend is healthy — no unavailability banner.
     expect(screen.queryByText(/Backend unavailable/)).not.toBeInTheDocument();
   });
 
-  it("shows a backend-unavailable banner when readiness fails", async () => {
+  it("shows a backend-unavailable banner on any route when readiness fails", async () => {
     vi.mocked(client.getMarketSummary).mockResolvedValue({
       ticker_count: 50,
       price_row_count: 62800,
@@ -52,8 +64,34 @@ describe("App", () => {
     vi.mocked(client.getUniverse).mockResolvedValue([]);
     vi.mocked(client.getReadiness).mockRejectedValue(new client.ApiError("Unable to reach the RiskFecta API."));
 
-    render(<App />);
+    renderAt("/");
 
     await waitFor(() => expect(screen.getByText(/Backend unavailable/)).toBeInTheDocument());
+  });
+
+  it("navigates between routes via the nav bar without page reload", async () => {
+    vi.mocked(client.getMarketSummary).mockResolvedValue({
+      ticker_count: 50,
+      price_row_count: 62800,
+      first_date: "2021-03-01",
+      last_date: "2026-02-27",
+    });
+    vi.mocked(client.getUniverse).mockResolvedValue([]);
+    vi.mocked(client.getReadiness).mockResolvedValue({ status: "ok", database: "connected" });
+
+    const user = userEvent.setup();
+    renderAt("/");
+
+    // Overview page content.
+    expect(screen.getByRole("heading", { name: "Build status" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("link", { name: "Methodology" }));
+    expect(await screen.findByRole("heading", { name: /Methodology & roadmap/ })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("link", { name: "Forecast Rankings" }));
+    expect(await screen.findByRole("heading", { name: "Forecast Rankings" })).toBeInTheDocument();
+    // A not-yet-built surface must never show fabricated numbers/charts.
+    expect(document.querySelector(".chart")).not.toBeInTheDocument();
+    expect(screen.getByText(/not yet implemented/)).toBeInTheDocument();
   });
 });
