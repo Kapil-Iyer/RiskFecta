@@ -119,7 +119,7 @@ Aligned with the locked [`BUILD_PLAN.md`](BUILD_PLAN.md):
 | **4** | Baselines + XGBoost | Walk-forward OOS forecasts, pooled XGBoost |
 | **5** | LSTM | Walk-forward OOS forecasts, pooled LSTM |
 | **6** | Walk-forward comparison + ensemble | Model comparison evidence; 50/50 ensemble |
-| **7** | Portfolio optimization | Covariance experiment; Efficient Frontier; min-vol/max-Sharpe |
+| **7** | Portfolio optimization | Complete — official 46-period walk-forward experiment executed once (2022-03-28 to 2026-01-02); Sample/Ledoit-Wolf covariance, min-vol/max-Sharpe/equal-weight vs. SPXT; promising historical evidence in this sample, not a generalization claim — see [BUILD_PLAN.md](BUILD_PLAN.md) Phase 7 for the frozen results and Phase 9 for the untouched sealed test |
 | **8** | Full research dashboard | All PRD-listed pages live on real data |
 | **9** | Sealed March 2026 evaluation | One-time, frozen-methodology holdout case study |
 | **10** | Hardening + release | Full tests, CI/CD audit, final README, honest resume metrics |
@@ -220,7 +220,7 @@ uvicorn app.main:app --reload
 
 Interactive docs (auto-generated from the Pydantic schemas): `http://127.0.0.1:8000/docs`
 
-Read-only endpoints (Phase 2A — no forecasts, portfolios, or risk metrics; those tables are empty):
+Read-only endpoints (Phase 2A — do not expose or mutate forecasts, portfolios, or risk metrics):
 
 | Endpoint | Purpose |
 |----------|---------|

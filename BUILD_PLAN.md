@@ -214,7 +214,7 @@ This document defines sequencing and gates only. It restates ML/quant methodolog
 
 **Tests:** Covariance matrix is PSD and computed only from realized historical returns as of each formation date; optimizer respects long-only/fully-invested/max-weight constraints exactly; Sharpe uses the correctly unit-normalized risk-free rate.
 
-**Acceptance criteria:** Efficient frontier, min-vol, and max-Sharpe portfolios computed across the historical walk-forward evaluation periods, compared against equal-weight and SPX benchmarks (§27); covariance-method choice is documented with its supporting evidence; max-weight constraint is documented with its supporting rationale.
+**Acceptance criteria:** Efficient frontier, min-vol, and max-Sharpe portfolios computed across the historical walk-forward evaluation periods, compared against equal-weight and SPXT benchmarks (§27); covariance-method choice is documented with its supporting evidence; max-weight constraint is documented with its supporting rationale. The Phase 7 portfolio experiment covers the **46** covariance-eligible formations of the Phase 4–6 47-date forecasting calendar (2022-02-25 excluded for insufficient covariance history — see [ML_SPEC.md](ML_SPEC.md) §23; the underlying 47-date `predictions` calendar is unchanged).
 
 **Stop/gate criteria:** No leverage/shorting/Black-Litterman/risk parity/robust optimization without separate explicit approval.
 
@@ -223,6 +223,31 @@ This document defines sequencing and gates only. It restates ML/quant methodolog
 **Integrity Audit required:** Yes — accidental future covariance information, benchmark timing issues, improper March usage (confirm absence) (§29, §30).
 
 **Handoff to Cursor:** Verify covariance and optimizer inputs never include a return realized after the relevant formation date; verify the risk-free-rate unit conversion; verify constraint satisfaction on every produced portfolio.
+
+**Results (frozen, executed once, 2026-09-16 — Cursor Post-Run Integrity Audit: PASS):**
+
+The official Phase 7 experiment ran across the **46 covariance-eligible formations** (2022-03-28 through 2026-01-02; 2022-02-25 excluded per above). All figures below are historical evidence from **46 sequential, non-overlapping 21-trading-session periods** — **not annualized**, no risk-adjusted (Sharpe-style) aggregate computed, no transaction costs modeled.
+
+| Strategy | Mean 21-session return | Std | Hit rate | Mean turnover | Avg max weight | Cumulative return |
+|---|---|---|---|---|---|---|
+| SAMPLE_MINVOL | 0.89% | 3.89% | 60.9% | 0.084 | 0.100 | 45.4% |
+| SAMPLE_MAXSHARPE | 2.00% | 5.88% | 67.4% | 0.636 | 0.100 | 130.6% |
+| LW_MINVOL | 0.90% | 3.88% | 60.9% | 0.081 | 0.100 | 45.9% |
+| LW_MAXSHARPE | 2.00% | 5.88% | 67.4% | 0.636 | 0.100 | 130.3% |
+| EQUAL_WEIGHT | 1.57% | 5.45% | 60.9% | 0.000 | 0.020 | 91.6% |
+| SPXT (benchmark) | 1.11% | 4.18% | 67.4% | — | — | 60.0% |
+
+Interpretation, per the frozen methodology:
+
+- `SAMPLE_MAXSHARPE`/`LW_MAXSHARPE` use the ML ensemble expected-return signal (`mu_21`); `SAMPLE_MINVOL`/`LW_MINVOL` are **mu-independent by construction** (no expected-return input at all).
+- The 10% per-stock cap (`MAX_WEIGHT`) was **frequently binding** across all four optimized strategies (average max observed weight ≈ 0.100 in every case).
+- `EQUAL_WEIGHT` turnover is ≈0 by construction (weights stay fixed at 1/50 every period), not a modeling result.
+- Ledoit-Wolf substantially improved covariance conditioning versus Sample (mean condition number ≈327 vs. ≈694) but produced **very similar realized portfolio outcomes** to Sample covariance — the shrinkage/stability benefit did not translate into a materially different result in this sample.
+- `MAXSHARPE` produced stronger historical raw returns than Equal Weight/SPXT in this sample, at substantially higher turnover and somewhat higher volatility; `MINVOL` underperformed both benchmarks.
+- No transaction costs are modeled — these are **not** live/investable returns, and this is **not** evidence that "ML works" in general; the preferred reading is **promising historical evidence in this one sample**. Phase 6's standalone forecasting metrics were themselves weak (see Phase 6 results above), which tempers how much weight this single portfolio-level result should carry on its own.
+- The sealed March 2026 holdout (Phase 9) remains untouched and is the actual out-of-sample generalization test — this Phase 7 result was itself produced from the same pre-March history the models were built on, not a fresh sample.
+
+Full per-strategy statistics (median/min/max/median-turnover/max-turnover/max-observed-weight) and the Sample-vs-Ledoit-Wolf covariance diagnostics (eigenvalues, PSD status) are recorded in the Phase 7B execution report; persisted in `portfolios` (11,500 rows) and `risk_metrics` (685 rows), `run_id` prefix `p7bv1_`.
 
 ---
 

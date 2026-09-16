@@ -29,6 +29,24 @@ LSTM_SEQ = 60        # input sequence length (trading sessions)
 FORECAST_HORIZON = 21  # 21-session forward return target
 
 # ---------------------------------------------------------------------------
+# Phase 7 portfolio-optimization decision gates (LOCKED — planner resolution,
+# NOT previously frozen in ML_SPEC.md/BUILD_PLAN.md; see optimizer/ module
+# docstrings for the full methodology write-up).
+# ---------------------------------------------------------------------------
+# Covariance lookback: most recent 252 valid-session one-session TRI returns
+# ending at/before the formation date. Deliberately a SEPARATE constant from
+# TRAIN_WINDOW even though both are currently 252 — they represent different
+# methodology (model-training window vs. covariance-estimation window) and
+# must never be aliased to one another.
+COVAR_WINDOW = 252
+
+# Maximum single-position weight for constrained mean-variance optimization
+# (ML_SPEC.md §26 decision gate). 10% was NOT previously frozen; it is a
+# planner decision-gate resolution, not derived from OOS sensitivity
+# analysis. Never silently changed to another value after seeing results.
+MAX_WEIGHT = 0.10
+
+# ---------------------------------------------------------------------------
 # Momentum lookbacks (Phase 3 decision gate — LOCKED)
 # ML_SPEC.md §6/§15 name "momentum (3-month, 6-month equivalent in trading
 # sessions)" without freezing an exact session count. This project adopts

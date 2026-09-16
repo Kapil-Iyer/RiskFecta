@@ -18,7 +18,7 @@ Given historical Bloomberg market and macro data for a fixed 50-equity universe,
 - **History:** approximately 5 years, ending around **2026-02-27** (exact terminal valid trading session confirmed against the normalized trading calendar, not assumed).
 - **Fields:**
   - Daily price panel: `PX_OPEN`, `PX_HIGH`, `PX_LOW`, `PX_LAST`, `PX_VOLUME`, `TOTAL_RETURN_INDEX`, per ticker.
-  - Macro daily series: `SPX` (`PX_LAST`), `VIX` (`PX_LAST`), `USGG10YR` (`PX_LAST`).
+  - Macro daily series: `SPX` (`PX_LAST`), `VIX` (`PX_LAST`), `USGG10YR` (`PX_LAST`). `SPX` here is a **price index** (dividends excluded) — this is macro/feature-family data only and is distinct from the Phase 7 portfolio market benchmark, which uses a separately-sourced total-return series (§27).
   - Static snapshot fields (single point-in-time pull, not historical): `CUR_MKT_CAP`, `BETA_RAW_OVERRIDABLE`, `DIVIDEND_INDICATED_YIELD` (Bloomberg field name confirmed from the raw export as `DIVIDEND_INDICATED_YIELD`; `docs/Bloomberg_export_spec.md`'s `DVD_YLD_IND` is a stale field name and is corrected only when that doc is revised in Phase 0/1 implementation — not in this documentation task), `GICS_SECTOR_NAME`.
 - The raw prices export is in **wide** Bloomberg panel format (repeated per-ticker column blocks with a shared `DATES` column); normalization reshapes this to **long** `(ticker, date, field)` rows before any modeling.
 
@@ -127,7 +127,7 @@ Followed by:
 - **LSTM** (pooled, §9, §18).
 - **Equal-weight XGBoost + LSTM ensemble** (§19).
 
-Portfolio-level benchmarks (not model baselines, but required comparators for the optimizer/portfolio evaluation, §27): equal-weight 50-stock portfolio, SPX.
+Portfolio-level benchmarks (not model baselines, but required comparators for the optimizer/portfolio evaluation, §27): equal-weight 50-stock portfolio, S&P 500 Total Return (SPXT) — see §27 for the exact benchmark definition.
 
 Baselines are deliberately simple mechanics — no arbitrarily complicated baseline construction.
 
@@ -189,6 +189,7 @@ No target metric threshold (e.g., "55%+ directional accuracy") is fixed anywhere
   - (B) Ledoit-Wolf shrinkage covariance.
 - Selection between (A) and (B) is made from historical walk-forward evidence: numerical stability, portfolio stability, turnover (if measured), realized risk, realized risk-adjusted outcomes, and other defensible stability diagnostics — evaluated in [BUILD_PLAN.md](BUILD_PLAN.md) Phase 7.
 - No predicted-covariance model is introduced in MVP.
+- **Phase 7 portfolio-eligibility boundary (planner-resolved, discovered pre-results during the Phase 7B pre-flight dry run, before any portfolio/realized/SPXT result was observed):** the Phase 7 covariance lookback (252 one-session returns) requires 253 causal TRI levels — one more session than `TRAIN_WINDOW=252` needed to make a date selectable as a Phase 4–6 forecasting formation in the first place (a return is a first difference of levels). Consequently the Phase 4–6 forecasting calendar's **first** formation (2022-02-25) has only 252 causal TRI levels as of that date and is not Phase 7 portfolio-eligible, while all 46 remaining formations have ample history. The Phase 4–6 forecasting calendar itself is unchanged (still 47 formations; 2022-02-25 remains a valid ML forecasting record); the Phase 7 **portfolio** experiment uses the **46** covariance-eligible formations only (first: 2022-03-28). No shorter covariance window, padding, interpolation, or future data is substituted for the excluded date.
 
 ## 24. Optimizer Inputs
 
@@ -227,9 +228,11 @@ Not in MVP: leverage, shorting, Black-Litterman, risk parity, or robust optimiza
 ## 27. Portfolio-Level Benchmarks
 
 - Equal-weight 50-stock portfolio.
-- SPX (total return).
+- **S&P 500 Total Return Index (SPXT)** — Bloomberg security `SPXT Index`, field `PX_LAST`, sourced from `data/raw/spxt_benchmark.csv` (obtained specifically for Phase 7, before any Phase 7 execution — see the Phase 7B SPXT amendment report). Benchmark return over a formation date `T` and its exact frozen `T+21` evaluation date is `SPXT(T+21)/SPXT(T) - 1`, using the identical `T`/`T+21` endpoints as the portfolio experiment (no independently shifted date, no nearest-date substitution, no interpolation). Evaluation-only: SPXT never enters expected returns, covariance estimation, the risk-free rate, or optimizer construction.
 
-Both are computed over the same historical walk-forward evaluation periods as the optimized portfolios, for like-for-like comparison.
+  **Resolved decision-gate history:** an earlier draft of this section named "SPX (total return)" without a sourced total-return series — the only SPX data ever ingested (§2's macro `SPX` field) is a **price** index, not total return. That inconsistency was caught as a Phase 7B pre-execution HARD STOP (before any Phase 7 result was observed) and resolved by sourcing the dedicated SPXT artifact above, rather than by silently treating the price-only macro series as total return.
+
+Both benchmarks are computed over the same historical walk-forward evaluation periods as the optimized portfolios, for like-for-like comparison.
 
 ## 28. March Sealed Holdout
 

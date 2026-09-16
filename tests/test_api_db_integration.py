@@ -25,12 +25,15 @@ _skip_no_db = pytest.mark.skipif(
     reason="DATABASE_URL not set in the environment (expected in CI / clean checkouts)",
 )
 
-# Still-empty downstream research tables the Phase 2A API must never touch.
-# `features` (Phase 3) and `predictions` (Phase 4) are intentionally omitted:
-# both may already hold legitimate rows; the API invariant for them is
-# "row count unchanged across API calls"
-# (see test_future_phase_tables_remain_empty_after_api_use).
-EMPTY_DOWNSTREAM_TABLES = ["portfolios", "risk_metrics"]
+# Downstream research tables the Phase 2A read-only API must never mutate.
+# `features` (Phase 3) and `predictions` (Phase 4) were already populated
+# even at Phase 2A. `portfolios`/`risk_metrics` (Phase 7) were empty when
+# this test was first written but now legitimately hold the official,
+# frozen Phase 7B experiment (11,500 / 685 rows) — so, like
+# features/predictions, the invariant is "row count unchanged across API
+# calls", never a hard-coded emptiness assumption
+# (see test_future_phase_tables_remain_unchanged_after_api_use).
+UNCHANGED_DOWNSTREAM_TABLES = ["features", "predictions", "portfolios", "risk_metrics"]
 EXPECTED_ROW_COUNT = 62_800  # 50 tickers x 1256 valid sessions each (Phase 1A audit)
 
 
@@ -99,18 +102,18 @@ def test_market_summary_matches_known_totals(client):
 
 
 @_skip_no_db
-def test_future_phase_tables_remain_empty_after_api_use(client):
+def test_future_phase_tables_remain_unchanged_after_api_use(client):
     """Phase 2A read-only API must not mutate later-phase research tables.
 
-    `features` (Phase 3) and `predictions` (Phase 4) may already be populated —
-    assert their row counts are unchanged across the API calls rather than
-    hard-coding emptiness or a fixed size. Still-unused tables
-    (portfolios/risk_metrics) must remain empty.
+    Every downstream table's row count must be identical before and after
+    a batch of ordinary read-only API calls — never a hard-coded
+    emptiness assumption, which breaks the moment a later phase
+    legitimately populates that table (as Phase 7B's frozen 46-period
+    experiment now has for `portfolios`/`risk_metrics`).
     """
     conn = db.get_connection()
     try:
-        features_before = db.fetch_scalar(conn, "SELECT COUNT(*) FROM features")
-        predictions_before = db.fetch_scalar(conn, "SELECT COUNT(*) FROM predictions")
+        before = {t: db.fetch_scalar(conn, f"SELECT COUNT(*) FROM {t}") for t in UNCHANGED_DOWNSTREAM_TABLES}
     finally:
         conn.close()
 
@@ -123,18 +126,10 @@ def test_future_phase_tables_remain_empty_after_api_use(client):
 
     conn = db.get_connection()
     try:
-        features_after = db.fetch_scalar(conn, "SELECT COUNT(*) FROM features")
-        predictions_after = db.fetch_scalar(conn, "SELECT COUNT(*) FROM predictions")
-        assert features_after == features_before, (
-            f"features row count changed across Phase 2A API use "
-            f"({features_before} -> {features_after})"
-        )
-        assert predictions_after == predictions_before, (
-            f"predictions row count changed across Phase 2A API use "
-            f"({predictions_before} -> {predictions_after})"
-        )
-        for table in EMPTY_DOWNSTREAM_TABLES:
-            n = db.fetch_scalar(conn, f"SELECT COUNT(*) FROM {table}")
-            assert n == 0, f"{table} is not empty after Phase 2A API use"
+        for table, before_count in before.items():
+            after_count = db.fetch_scalar(conn, f"SELECT COUNT(*) FROM {table}")
+            assert after_count == before_count, (
+                f"{table} row count changed across Phase 2A API use ({before_count} -> {after_count})"
+            )
     finally:
         conn.close()
