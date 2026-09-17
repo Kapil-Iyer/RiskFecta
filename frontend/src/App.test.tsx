@@ -16,15 +16,20 @@ vi.mock("./api/client", async () => {
     getPredictions: vi.fn(),
     getPredictionDates: vi.fn(),
     getModelComparison: vi.fn(),
+    getPortfolioDates: vi.fn(),
+    getPortfolioStrategies: vi.fn(),
+    getPortfolio: vi.fn(),
   };
 });
 
-/** Overview fetches universe/predictions/model-comparison on mount; every
- * test that renders "/" needs these mocked to avoid an uncontrolled real
- * fetch, even when the test itself only cares about shell-level behavior. */
+/** Overview fetches universe/predictions/model-comparison/portfolio-dates
+ * on mount; every test that renders "/" needs these mocked to avoid an
+ * uncontrolled real fetch, even when the test itself only cares about
+ * shell-level behavior. */
 function mockOverviewDataAsPending() {
   vi.mocked(client.getPredictions).mockReturnValue(new Promise(() => {}));
   vi.mocked(client.getModelComparison).mockReturnValue(new Promise(() => {}));
+  vi.mocked(client.getPortfolioDates).mockReturnValue(new Promise(() => {}));
 }
 
 function renderAt(path: string) {
@@ -101,11 +106,11 @@ describe("App routing shell", () => {
     await user.click(screen.getByRole("link", { name: "Methodology" }));
     expect(await screen.findByRole("heading", { name: /Methodology & roadmap/ })).toBeInTheDocument();
 
-    // Portfolio Construction is still a not-yet-built Coming Soon surface
-    // (Forecast Rankings and Model Comparison each have their own dedicated
-    // test suites in pages/*.test.tsx).
-    await user.click(screen.getByRole("link", { name: "Portfolio Construction" }));
-    expect(await screen.findByRole("heading", { name: "Portfolio Construction" })).toBeInTheDocument();
+    // Efficient Frontier is still a not-yet-built Coming Soon surface
+    // (Forecast Rankings, Model Comparison, and Portfolio Construction each
+    // have their own dedicated test suites in pages/*.test.tsx).
+    await user.click(screen.getByRole("link", { name: "Efficient Frontier" }));
+    expect(await screen.findByRole("heading", { name: "Efficient Frontier" })).toBeInTheDocument();
     // A not-yet-built surface must never show fabricated numbers/charts.
     expect(document.querySelector(".chart")).not.toBeInTheDocument();
     expect(screen.getByText(/not yet implemented/)).toBeInTheDocument();

@@ -9,9 +9,11 @@ import type {
   HealthResponse,
   MarketSummaryResponse,
   ModelComparisonResponse,
+  PortfolioResponse,
   PredictionCrossSectionResponse,
   PriceHistoryResponse,
   ReadinessResponse,
+  StrategyInfo,
   UniverseTicker,
 } from "./types";
 
@@ -110,4 +112,23 @@ export function getPredictions(formationDate?: string): Promise<PredictionCrossS
  * experiment. Never a live/current model score. */
 export function getModelComparison(): Promise<ModelComparisonResponse> {
   return request<ModelComparisonResponse>("/api/models/comparison");
+}
+
+/** All 46 real Phase 7 portfolio-eligible formation dates (2022-02-25 is
+ * prediction-only and is never included here). */
+export function getPortfolioDates(): Promise<string[]> {
+  return request<string[]>("/api/portfolios/dates");
+}
+
+/** The 5 frozen official strategies, with their canonical labels/objective
+ * text — never a "best strategy" ranking. */
+export function getPortfolioStrategies(): Promise<StrategyInfo[]> {
+  return request<StrategyInfo[]>("/api/portfolios/strategies");
+}
+
+/** One official, persisted Phase 7 portfolio (50 holdings + construction/
+ * evaluation metrics). Omit either argument to get the latest date /
+ * Ledoit-Wolf Max-Sharpe default — never a live/current allocation. */
+export function getPortfolio(formationDate?: string, strategy?: string): Promise<PortfolioResponse> {
+  return request<PortfolioResponse>("/api/portfolios", { formation_date: formationDate, strategy });
 }

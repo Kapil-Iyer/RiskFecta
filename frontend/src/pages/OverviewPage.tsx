@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import { motion } from "framer-motion";
 import { Link, useOutletContext } from "react-router-dom";
 import type { AppOutletContext } from "../AppShell";
-import { getModelComparison, getPredictions, getUniverse } from "../api/client";
+import { getModelComparison, getPortfolioDates, getPredictions, getUniverse } from "../api/client";
 import { useAsync } from "../hooks/useAsync";
 import OverviewHero from "../components/overview/OverviewHero";
 import ResearchSnapshot from "../components/overview/ResearchSnapshot";
@@ -30,6 +30,10 @@ export default function OverviewPage() {
   const [modelsAttempt, setModelsAttempt] = useState(0);
   const modelComparisonState = useAsync(getModelComparison, [modelsAttempt]);
   const retryModels = useCallback(() => setModelsAttempt((n) => n + 1), []);
+
+  // Lightweight reachability check only (dates list, not a full portfolio
+  // fetch) — just enough real evidence for the status section below.
+  const portfolioDatesState = useAsync(getPortfolioDates, []);
 
   const universe = universeState.status === "success" ? universeState.data : [];
 
@@ -72,6 +76,7 @@ export default function OverviewPage() {
           universeReachable={universeState.status === "success"}
           forecastsReachable={predictionsState.status === "success"}
           modelComparisonReachable={modelComparisonState.status === "success"}
+          portfolioReachable={portfolioDatesState.status === "success"}
         />
       </div>
 

@@ -7,6 +7,7 @@ interface ResearchStatusSectionProps {
   universeReachable: boolean;
   forecastsReachable: boolean;
   modelComparisonReachable: boolean;
+  portfolioReachable: boolean;
 }
 
 interface StatusColumn {
@@ -14,7 +15,7 @@ interface StatusColumn {
   items: string[];
 }
 
-const DASHBOARD_LIVE_PATHS = new Set(["/", "/universe", "/forecasts", "/models", "/methodology"]);
+const DASHBOARD_LIVE_PATHS = new Set(["/", "/universe", "/forecasts", "/models", "/portfolio", "/methodology"]);
 
 /**
  * Replaces the old `BuildStatusSection` with a clearer three-way split:
@@ -26,6 +27,7 @@ export default function ResearchStatusSection({
   universeReachable,
   forecastsReachable,
   modelComparisonReachable,
+  portfolioReachable,
 }: ResearchStatusSectionProps) {
   const liveNav = NAV_ITEMS.filter((n) => DASHBOARD_LIVE_PATHS.has(n.path));
   const comingNav = NAV_ITEMS.filter((n) => !DASHBOARD_LIVE_PATHS.has(n.path));
@@ -40,7 +42,7 @@ export default function ResearchStatusSection({
         "Frozen 50/50 ensemble" + (modelComparisonReachable ? " (verified live)" : ""),
         "Sample + Ledoit-Wolf covariance",
         "Constrained Min-Vol / Max-Sharpe optimization",
-        "Phase 7 historical portfolio research",
+        "Phase 7 historical portfolio research" + (portfolioReachable ? " (verified live)" : ""),
       ],
     },
     {

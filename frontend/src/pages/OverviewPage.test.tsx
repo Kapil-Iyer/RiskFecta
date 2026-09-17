@@ -14,6 +14,7 @@ vi.mock("../api/client", async () => {
     getUniverse: vi.fn(),
     getPredictions: vi.fn(),
     getModelComparison: vi.fn(),
+    getPortfolioDates: vi.fn(),
   };
 });
 
@@ -92,6 +93,7 @@ describe("OverviewPage", () => {
     vi.mocked(client.getUniverse).mockResolvedValue(REAL_UNIVERSE);
     vi.mocked(client.getPredictions).mockResolvedValue(PREDICTIONS);
     vi.mocked(client.getModelComparison).mockResolvedValue(MODEL_COMPARISON);
+    vi.mocked(client.getPortfolioDates).mockResolvedValue(["2022-03-28", "2026-01-02"]);
 
     renderPage();
 
@@ -108,6 +110,7 @@ describe("OverviewPage", () => {
     vi.mocked(client.getUniverse).mockResolvedValue(REAL_UNIVERSE);
     vi.mocked(client.getPredictions).mockResolvedValue(PREDICTIONS);
     vi.mocked(client.getModelComparison).mockResolvedValue(MODEL_COMPARISON);
+    vi.mocked(client.getPortfolioDates).mockResolvedValue(["2022-03-28", "2026-01-02"]);
 
     renderPage();
 
@@ -125,6 +128,7 @@ describe("OverviewPage", () => {
     vi.mocked(client.getUniverse).mockResolvedValue(REAL_UNIVERSE);
     vi.mocked(client.getPredictions).mockResolvedValue(PREDICTIONS);
     vi.mocked(client.getModelComparison).mockResolvedValue(MODEL_COMPARISON);
+    vi.mocked(client.getPortfolioDates).mockResolvedValue(["2022-03-28", "2026-01-02"]);
 
     renderPage();
     await waitFor(() => expect(screen.getByText("50")).toBeInTheDocument());
@@ -139,6 +143,7 @@ describe("OverviewPage", () => {
     vi.mocked(client.getUniverse).mockResolvedValue(REAL_UNIVERSE);
     vi.mocked(client.getPredictions).mockResolvedValue(PREDICTIONS);
     vi.mocked(client.getModelComparison).mockResolvedValue(MODEL_COMPARISON);
+    vi.mocked(client.getPortfolioDates).mockResolvedValue(["2022-03-28", "2026-01-02"]);
 
     renderPage();
 
@@ -152,6 +157,7 @@ describe("OverviewPage", () => {
     vi.mocked(client.getUniverse).mockResolvedValue(REAL_UNIVERSE);
     vi.mocked(client.getPredictions).mockResolvedValue(PREDICTIONS);
     vi.mocked(client.getModelComparison).mockResolvedValue(MODEL_COMPARISON);
+    vi.mocked(client.getPortfolioDates).mockResolvedValue(["2022-03-28", "2026-01-02"]);
 
     renderPage();
 
@@ -164,20 +170,27 @@ describe("OverviewPage", () => {
     vi.mocked(client.getUniverse).mockResolvedValue(REAL_UNIVERSE);
     vi.mocked(client.getPredictions).mockResolvedValue(PREDICTIONS);
     vi.mocked(client.getModelComparison).mockResolvedValue(MODEL_COMPARISON);
+    vi.mocked(client.getPortfolioDates).mockResolvedValue(["2022-03-28", "2026-01-02"]);
 
     renderPage();
 
     expect(await screen.findByText("Research engine — complete")).toBeInTheDocument();
-    expect(screen.getByText("Dashboard — live now")).toBeInTheDocument();
-    expect(screen.getByText("Dashboard — coming next")).toBeInTheDocument();
-    expect(screen.getByText("Portfolio Construction")).toBeInTheDocument();
-    expect(screen.getByText("Efficient Frontier")).toBeInTheDocument();
+    const liveColumn = screen.getByText("Dashboard — live now").closest("div");
+    const comingColumn = screen.getByText("Dashboard — coming next").closest("div");
+    expect(liveColumn).not.toBeNull();
+    expect(comingColumn).not.toBeNull();
+    // Portfolio Construction is now real (this Phase 8C slice) — it must
+    // have moved out of "coming next" and into "live now".
+    expect(within(liveColumn as HTMLElement).getByText("Portfolio Construction")).toBeInTheDocument();
+    expect(within(comingColumn as HTMLElement).getByText("Efficient Frontier")).toBeInTheDocument();
+    expect(within(comingColumn as HTMLElement).queryByText("Portfolio Construction")).not.toBeInTheDocument();
   });
 
   it("discloses historical-only data and the sealed March holdout, never implying live market data", async () => {
     vi.mocked(client.getUniverse).mockResolvedValue(REAL_UNIVERSE);
     vi.mocked(client.getPredictions).mockResolvedValue(PREDICTIONS);
     vi.mocked(client.getModelComparison).mockResolvedValue(MODEL_COMPARISON);
+    vi.mocked(client.getPortfolioDates).mockResolvedValue(["2022-03-28", "2026-01-02"]);
 
     renderPage();
 
@@ -191,6 +204,7 @@ describe("OverviewPage", () => {
     vi.mocked(client.getUniverse).mockResolvedValue(REAL_UNIVERSE);
     vi.mocked(client.getPredictions).mockRejectedValue(new client.ApiError("Unable to reach the RiskFecta API."));
     vi.mocked(client.getModelComparison).mockRejectedValue(new client.ApiError("Unable to reach the RiskFecta API."));
+    vi.mocked(client.getPortfolioDates).mockResolvedValue(["2022-03-28", "2026-01-02"]);
 
     renderPage();
 
@@ -204,6 +218,7 @@ describe("OverviewPage", () => {
     vi.mocked(client.getUniverse).mockReturnValue(new Promise(() => {}));
     vi.mocked(client.getPredictions).mockReturnValue(new Promise(() => {}));
     vi.mocked(client.getModelComparison).mockReturnValue(new Promise(() => {}));
+    vi.mocked(client.getPortfolioDates).mockReturnValue(new Promise(() => {}));
 
     renderPage();
 

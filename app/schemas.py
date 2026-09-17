@@ -2,9 +2,9 @@
 Pydantic request/response schemas for the RiskFecta API.
 
 Every field here reflects data that already exists in `prices_raw`, the
-Phase 1 static snapshot, project config, or (as of Phase 8B) the frozen
-Phase 4-6 `predictions` table. Schemas for the Phase 7 optimizer output are
-not yet defined here — see BUILD_PLAN.md Phase 8C/8D.
+Phase 1 static snapshot, project config, the frozen Phase 4-6 `predictions`
+table, or (as of Phase 8C) the frozen, official Phase 7 portfolio experiment
+persisted in `portfolios`/`risk_metrics`.
 """
 from __future__ import annotations
 
@@ -138,3 +138,59 @@ class ModelComparisonResponse(BaseModel):
     models: List[ModelMetricRow]
     metric_definitions: List[MetricDefinition]
     disagreement: Optional[ModelDisagreementSummary] = None
+
+
+class HoldingRow(BaseModel):
+    """One ticker's persisted weight within an official Phase 7 portfolio.
+    Base order is deterministic (ticker ascending) — ranking by weight is a
+    client-side concern, matching the Forecast Rankings convention."""
+
+    ticker: str
+    weight: float
+
+
+class StrategyInfo(BaseModel):
+    """Frozen Phase 7 strategy identity/metadata — never a "best strategy"
+    judgment. `covariance_estimator` is "Not applicable" for EQUAL_WEIGHT
+    (a benchmark, never routed through the optimizer or MAX_WEIGHT)."""
+
+    key: str
+    label: str
+    covariance_estimator: str
+    objective: str
+    is_optimized: bool
+
+
+class PortfolioConstructionMetrics(BaseModel):
+    """Ex-ante (construction-time) figures, already persisted per-row on
+    `portfolios` (`target_return`/`portfolio_vol`/`sharpe_ratio`) — read
+    directly, never reconstructed from mu/Sigma/rf here. All `None` for
+    EQUAL_WEIGHT (a benchmark, not an optimized construction)."""
+
+    expected_return_21: Optional[float] = None
+    predicted_volatility_21: Optional[float] = None
+    expected_sharpe_21: Optional[float] = None
+
+
+class PortfolioEvaluationMetrics(BaseModel):
+    """Ex-post (realized-after-the-fact) figures from `risk_metrics`.
+    `turnover` is `None` — not zero — for each strategy's first official
+    formation date, where turnover is genuinely undefined (no prior
+    portfolio to compare against)."""
+
+    realized_return_21: float
+    turnover: Optional[float] = None
+    max_weight_observed: float
+
+
+class PortfolioResponse(BaseModel):
+    formation_date: date
+    strategy: StrategyInfo
+    max_weight_constraint: Optional[float] = None
+    holdings: List[HoldingRow]
+    active_holdings_count: int
+    largest_weight: float
+    concentration_hhi: float
+    construction: PortfolioConstructionMetrics
+    evaluation: PortfolioEvaluationMetrics
+    source: str

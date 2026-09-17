@@ -4,6 +4,7 @@ import OverviewPage from "./pages/OverviewPage";
 import UniversePage from "./pages/UniversePage";
 import ForecastRankingsPage from "./pages/ForecastRankingsPage";
 import ModelComparisonPage from "./pages/ModelComparisonPage";
+import PortfolioConstructionPage from "./pages/PortfolioConstructionPage";
 import MethodologyPage from "./pages/MethodologyPage";
 import ComingSoonPage from "./pages/ComingSoonPage";
 
@@ -18,15 +19,7 @@ export default function AppRoutes() {
         <Route path="/universe" element={<UniversePage />} />
         <Route path="/forecasts" element={<ForecastRankingsPage />} />
         <Route path="/models" element={<ModelComparisonPage />} />
-        <Route
-          path="/portfolio"
-          element={
-            <ComingSoonPage
-              title="Portfolio Construction"
-              description="Optimized portfolio weights and statistics from the constrained mean-variance optimizer."
-            />
-          }
-        />
+        <Route path="/portfolio" element={<PortfolioConstructionPage />} />
         <Route
           path="/frontier"
           element={

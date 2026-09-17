@@ -374,6 +374,136 @@ def test_model_comparison_no_overall_winner_field():
 
 
 # ---------------------------------------------------------------------------
+# Portfolios (frozen, official Phase 7 experiment — Phase 8C)
+# ---------------------------------------------------------------------------
+class _FakeCursorSequential:
+    """Returns a different canned `fetchall()` result on each successive
+    `with conn.cursor() as cur:` block — `get_portfolio` issues two
+    structurally different SELECTs (portfolio weights, then risk metrics)
+    that the shared single-shape `_FakeCursor` can't model."""
+
+    def __init__(self, results):
+        self._results = list(results)
+        self._call = -1
+
+    def execute(self, sql, params=None):
+        pass
+
+    def fetchall(self):
+        return self._results[self._call]
+
+    def __enter__(self):
+        self._call += 1
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+class _FakeConnSequential:
+    def __init__(self, results):
+        self._cursor = _FakeCursorSequential(results)
+
+    def cursor(self):
+        return self._cursor
+
+    def close(self):
+        pass
+
+
+def _get_db_returning_sequential(results):
+    def _fake_get_db():
+        yield _FakeConnSequential(results)
+
+    return _fake_get_db
+
+
+# 50 rows in config.TICKER_UNIVERSE order, matching real persisted shape —
+# two names at the 10% cap, the rest a small non-trivial spread.
+_PORTFOLIO_ROWS = [
+    (ticker, 0.1 if i < 2 else round(0.9 / 48, 6), 0.041, 0.056, 0.667)
+    for i, ticker in enumerate(config.TICKER_UNIVERSE)
+]
+_RISK_METRIC_ROWS = [("realized_return_21", -0.0123), ("max_weight_observed", 0.1), ("turnover", 0.42)]
+_RISK_METRIC_ROWS_FIRST_DATE = [("realized_return_21", -0.0456), ("max_weight_observed", 0.1)]
+
+
+def test_portfolio_dates_derived_from_official_run_ids(client):
+    run_ids = [(f"p7bv1_EQUAL_WEIGHT_2022-03-{d:02d}",) for d in (28, 29, 30)]
+    app.dependency_overrides[get_db] = _get_db_returning(run_ids)
+    resp = client.get("/api/portfolios/dates")
+    assert resp.status_code == 200
+    assert resp.json() == ["2022-03-28", "2022-03-29", "2022-03-30"]
+
+
+def test_portfolio_strategies_returns_five_official_strategies_no_ranking(client):
+    resp = client.get("/api/portfolios/strategies")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [s["key"] for s in body] == [
+        "SAMPLE_MINVOL", "SAMPLE_MAXSHARPE", "LW_MINVOL", "LW_MAXSHARPE", "EQUAL_WEIGHT",
+    ]
+    equal_weight = next(s for s in body if s["key"] == "EQUAL_WEIGHT")
+    assert equal_weight["is_optimized"] is False
+    assert equal_weight["covariance_estimator"] == "Not applicable"
+
+
+def test_portfolio_explicit_date_and_strategy_returns_50_holdings_with_provenance(client):
+    app.dependency_overrides[get_db] = _get_db_returning_sequential([_PORTFOLIO_ROWS, _RISK_METRIC_ROWS])
+    resp = client.get("/api/portfolios", params={"formation_date": "2026-01-02", "strategy": "LW_MAXSHARPE"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["holdings"]) == 50
+    assert body["strategy"]["key"] == "LW_MAXSHARPE"
+    assert body["max_weight_constraint"] == 0.10
+    assert body["largest_weight"] == 0.1
+    assert body["active_holdings_count"] == 50
+    # Construction (ex-ante) figures come straight from the persisted row —
+    # never recomputed here.
+    assert body["construction"]["expected_return_21"] == 0.041
+    assert body["construction"]["predicted_volatility_21"] == 0.056
+    assert body["construction"]["expected_sharpe_21"] == 0.667
+    # Evaluation (ex-post) figures are clearly separate.
+    assert body["evaluation"]["realized_return_21"] == -0.0123
+    assert body["evaluation"]["turnover"] == 0.42
+    assert body["source"] == "official_phase7_persisted_experiment"
+
+
+def test_portfolio_first_formation_has_undefined_turnover(client):
+    app.dependency_overrides[get_db] = _get_db_returning_sequential([_PORTFOLIO_ROWS, _RISK_METRIC_ROWS_FIRST_DATE])
+    resp = client.get("/api/portfolios", params={"formation_date": "2022-03-28", "strategy": "LW_MAXSHARPE"})
+    assert resp.status_code == 200
+    assert resp.json()["evaluation"]["turnover"] is None  # never 0
+
+
+def test_equal_weight_has_no_construction_metrics_or_max_weight_constraint(client):
+    equal_weight_rows = [(t, 0.02, None, None, None) for t in config.TICKER_UNIVERSE]
+    app.dependency_overrides[get_db] = _get_db_returning_sequential([equal_weight_rows, _RISK_METRIC_ROWS])
+    resp = client.get("/api/portfolios", params={"formation_date": "2022-03-28", "strategy": "EQUAL_WEIGHT"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert all(h["weight"] == 0.02 for h in body["holdings"])
+    assert body["construction"] == {"expected_return_21": None, "predicted_volatility_21": None, "expected_sharpe_21": None}
+    assert body["max_weight_constraint"] is None
+
+
+def test_portfolio_missing_run_returns_404(client):
+    app.dependency_overrides[get_db] = _get_db_returning([])
+    resp = client.get("/api/portfolios", params={"formation_date": "2022-02-25", "strategy": "LW_MAXSHARPE"})
+    assert resp.status_code == 404
+
+
+def test_portfolio_invalid_strategy_returns_400(client):
+    resp = client.get("/api/portfolios", params={"formation_date": "2022-03-28", "strategy": "NOT_A_STRATEGY"})
+    assert resp.status_code == 400
+
+
+def test_portfolio_malformed_formation_date_returns_422(client):
+    resp = client.get("/api/portfolios", params={"formation_date": "not-a-date"})
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
 # Research API is read-only: no mutating SQL keyword anywhere in app/routes/
 # ---------------------------------------------------------------------------
 def test_research_routes_never_issue_mutating_sql():
@@ -385,14 +515,15 @@ def test_research_routes_never_issue_mutating_sql():
 
 # ---------------------------------------------------------------------------
 # Not-yet-authorized research tables must still never be referenced in app/
-# code. `predictions` was authorized for Phase 8B (Forecast Rankings) and is
-# deliberately removed from this list — see app/routes/predictions.py.
-# `features`, `portfolios`, and `risk_metrics` remain unauthorized until
-# their own future Phase 8 slices (Model Comparison, Portfolio Construction,
-# Efficient Frontier, Risk Analytics, Historical Evidence).
+# code. `predictions` (Phase 8B Forecast Rankings/Model Comparison) and
+# `portfolios`/`risk_metrics` (Phase 8C Portfolio Construction —
+# app/routes/portfolios.py reads both) are now authorized and deliberately
+# removed from this list. `features` remains unauthorized — no current
+# surface (Efficient Frontier, Risk Analytics, Historical Evidence) needs it
+# yet.
 # ---------------------------------------------------------------------------
 def test_unauthorized_future_phase_tables_never_referenced_in_app_code():
-    forbidden_tables = ["features", "portfolios", "risk_metrics"]
+    forbidden_tables = ["features"]
     app_dir = pathlib.Path(__file__).resolve().parent.parent / "app"
     for path in app_dir.rglob("*.py"):
         text = path.read_text().lower()

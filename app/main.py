@@ -26,16 +26,16 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.routes import health, market, models, predictions, prices, universe
+from app.routes import health, market, models, portfolios, predictions, prices, universe
 
 app = FastAPI(
     title="RiskFecta API",
     description=(
         "Read-only API over Supabase-hosted PostgreSQL: historical market data "
-        "(Phase 1) and frozen Phase 4-6 walk-forward forecast cross-sections. "
-        "Portfolio and risk-metric endpoints (Phase 7 data) are not yet exposed."
+        "(Phase 1), frozen Phase 4-6 walk-forward forecast cross-sections, and "
+        "the frozen, official Phase 7 historical portfolio-construction experiment."
     ),
-    version="0.2.0",
+    version="0.3.0",
 )
 
 # ---------------------------------------------------------------------------
@@ -73,3 +73,4 @@ app.include_router(prices.router)
 app.include_router(market.router)
 app.include_router(predictions.router)
 app.include_router(models.router)
+app.include_router(portfolios.router)

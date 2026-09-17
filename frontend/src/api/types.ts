@@ -124,3 +124,54 @@ export interface ModelComparisonResponse {
   metric_definitions: MetricDefinition[];
   disagreement: ModelDisagreementSummary | null;
 }
+
+/** One ticker's persisted weight within an official Phase 7 portfolio.
+ * Base order is deterministic (ticker ascending) — ranking by weight is a
+ * client-side concern, matching the Forecast Rankings convention. */
+export interface HoldingRow {
+  ticker: string;
+  weight: number;
+}
+
+/** Frozen Phase 7 strategy identity/metadata — never a "best strategy"
+ * judgment. `covariance_estimator` is "Not applicable" for EQUAL_WEIGHT (a
+ * benchmark, never routed through the optimizer or MAX_WEIGHT). */
+export interface StrategyInfo {
+  key: string;
+  label: string;
+  covariance_estimator: string;
+  objective: string;
+  is_optimized: boolean;
+}
+
+/** Ex-ante (construction-time) figures, already persisted per-row on
+ * `portfolios` — read directly by the backend, never reconstructed. All
+ * `null` for EQUAL_WEIGHT (a benchmark, not an optimized construction). */
+export interface PortfolioConstructionMetrics {
+  expected_return_21: number | null;
+  predicted_volatility_21: number | null;
+  expected_sharpe_21: number | null;
+}
+
+/** Ex-post (realized-after-the-fact) figures. `turnover` is `null` — never
+ * zero — for each strategy's first official formation date, where turnover
+ * is genuinely undefined (no prior portfolio to compare against). */
+export interface PortfolioEvaluationMetrics {
+  realized_return_21: number;
+  turnover: number | null;
+  max_weight_observed: number;
+}
+
+/** Full body of GET /api/portfolios. */
+export interface PortfolioResponse {
+  formation_date: string;
+  strategy: StrategyInfo;
+  max_weight_constraint: number | null;
+  holdings: HoldingRow[];
+  active_holdings_count: number;
+  largest_weight: number;
+  concentration_hhi: number;
+  construction: PortfolioConstructionMetrics;
+  evaluation: PortfolioEvaluationMetrics;
+  source: string;
+}
