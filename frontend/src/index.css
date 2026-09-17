@@ -4,6 +4,7 @@
    and pulling in Tailwind's reset on top of it risks fighting existing
    component styles for no benefit. Theme + utilities are enough to generate
    utility classes and register the token bridge below. */
+@layer theme, base, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
 
@@ -123,8 +124,20 @@ body {
   min-height: 100vh;
 }
 
-a {
-  color: var(--color-accent);
+/* Layered (not left unlayered) so shadcn Button/Link components' Tailwind
+   utility text-color classes (e.g. `text-primary-foreground` on a Button
+   rendered via `asChild`) can override this default — an unlayered rule
+   here would always win over ANY Tailwind utility class regardless of
+   specificity, per the CSS cascade-layers spec, which is exactly the bug
+   this fixes (a primary-variant Button-as-Link rendered with invisible
+   accent-on-accent text before this change). Plain inline text links with
+   no explicit color utility (most of the app) are unaffected — they still
+   resolve to this same accent blue, just via the `base` layer instead of
+   unlayered. */
+@layer base {
+  a {
+    color: var(--color-accent);
+  }
 }
 
 button {

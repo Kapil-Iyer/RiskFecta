@@ -13,8 +13,19 @@ vi.mock("./api/client", async () => {
     getUniverse: vi.fn(),
     getReadiness: vi.fn(),
     getPrices: vi.fn(),
+    getPredictions: vi.fn(),
+    getPredictionDates: vi.fn(),
+    getModelComparison: vi.fn(),
   };
 });
+
+/** Overview fetches universe/predictions/model-comparison on mount; every
+ * test that renders "/" needs these mocked to avoid an uncontrolled real
+ * fetch, even when the test itself only cares about shell-level behavior. */
+function mockOverviewDataAsPending() {
+  vi.mocked(client.getPredictions).mockReturnValue(new Promise(() => {}));
+  vi.mocked(client.getModelComparison).mockReturnValue(new Promise(() => {}));
+}
 
 function renderAt(path: string) {
   return render(
@@ -63,6 +74,7 @@ describe("App routing shell", () => {
     });
     vi.mocked(client.getUniverse).mockResolvedValue([]);
     vi.mocked(client.getReadiness).mockRejectedValue(new client.ApiError("Unable to reach the RiskFecta API."));
+    mockOverviewDataAsPending();
 
     renderAt("/");
 
@@ -78,12 +90,13 @@ describe("App routing shell", () => {
     });
     vi.mocked(client.getUniverse).mockResolvedValue([]);
     vi.mocked(client.getReadiness).mockResolvedValue({ status: "ok", database: "connected" });
+    mockOverviewDataAsPending();
 
     const user = userEvent.setup();
     renderAt("/");
 
     // Overview page content.
-    expect(screen.getByRole("heading", { name: "Build status" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Research pipeline" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("link", { name: "Methodology" }));
     expect(await screen.findByRole("heading", { name: /Methodology & roadmap/ })).toBeInTheDocument();
