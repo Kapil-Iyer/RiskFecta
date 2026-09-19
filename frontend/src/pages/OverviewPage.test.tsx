@@ -179,11 +179,14 @@ describe("OverviewPage", () => {
     const comingColumn = screen.getByText("Dashboard — coming next").closest("div");
     expect(liveColumn).not.toBeNull();
     expect(comingColumn).not.toBeNull();
-    // Portfolio Construction is now real (this Phase 8C slice) — it must
-    // have moved out of "coming next" and into "live now".
+    // Portfolio Construction and Efficient Frontier are now both real
+    // (Phase 8C) — they must have moved out of "coming next" and into
+    // "live now".
     expect(within(liveColumn as HTMLElement).getByText("Portfolio Construction")).toBeInTheDocument();
-    expect(within(comingColumn as HTMLElement).getByText("Efficient Frontier")).toBeInTheDocument();
+    expect(within(liveColumn as HTMLElement).getByText("Efficient Frontier")).toBeInTheDocument();
+    expect(within(comingColumn as HTMLElement).getByText("Risk Analytics")).toBeInTheDocument();
     expect(within(comingColumn as HTMLElement).queryByText("Portfolio Construction")).not.toBeInTheDocument();
+    expect(within(comingColumn as HTMLElement).queryByText("Efficient Frontier")).not.toBeInTheDocument();
   });
 
   it("discloses historical-only data and the sealed March holdout, never implying live market data", async () => {

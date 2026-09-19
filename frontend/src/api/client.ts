@@ -6,6 +6,7 @@
  * the local Phase 2A dev server so `npm run dev` works out of the box.
  */
 import type {
+  FrontierResponse,
   HealthResponse,
   MarketSummaryResponse,
   ModelComparisonResponse,
@@ -131,4 +132,14 @@ export function getPortfolioStrategies(): Promise<StrategyInfo[]> {
  * Ledoit-Wolf Max-Sharpe default — never a live/current allocation. */
 export function getPortfolio(formationDate?: string, strategy?: string): Promise<PortfolioResponse> {
   return request<PortfolioResponse>("/api/portfolios", { formation_date: formationDate, strategy });
+}
+
+/** Reconstructed (never persisted) Phase 7 efficient frontier at one
+ * historical formation date. Omit `formationDate` for the latest
+ * available; omit `covariance` for the Ledoit-Wolf default — never a
+ * "best estimator" ranking. This is real, request-time computation
+ * (multiple SLSQP solves), not a cached lookup — expect several seconds
+ * of latency. */
+export function getFrontier(formationDate?: string, covariance?: string): Promise<FrontierResponse> {
+  return request<FrontierResponse>("/api/frontier", { formation_date: formationDate, covariance });
 }

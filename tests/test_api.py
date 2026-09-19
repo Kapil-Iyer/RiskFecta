@@ -9,10 +9,12 @@ unset (e.g. in CI).
 """
 from __future__ import annotations
 
+import ast
 import pathlib
 import re
 from datetime import date
 
+import numpy as np
 import pandas as pd
 import psycopg2
 import pytest
@@ -21,6 +23,7 @@ from fastapi.testclient import TestClient
 import config
 from app.db import get_db
 from app.main import app
+from app.routes import frontier as frontier_module
 
 _SQL_MUTATION_KEYWORDS = re.compile(r"\b(insert\s+into|update\s+\w+\s+set|delete\s+from|drop\s+table|truncate|alter\s+table)\b")
 
@@ -501,6 +504,203 @@ def test_portfolio_invalid_strategy_returns_400(client):
 def test_portfolio_malformed_formation_date_returns_422(client):
     resp = client.get("/api/portfolios", params={"formation_date": "not-a-date"})
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Efficient Frontier (reconstructed, never persisted — Phase 8C final slice).
+# The numeric reconstruction path itself (mu/Sigma/rf, reconciliation
+# against official markers, causality) is verified against the REAL
+# database in tests/test_api_db_integration.py — these are pure route-level
+# unit tests: validation, wiring, response shape, and provenance. Boundary
+# functions (`_official_formation_dates`, `reconstruct_mu_sigma_rf`,
+# `_official_marker`) are monkeypatched with small synthetic (but
+# real-shaped, real-dimension) data so tests stay CI-fast without
+# depending on a live database.
+# ---------------------------------------------------------------------------
+def _fake_official_marker(conn, formation_date, strategy, label):
+    from app.schemas import FrontierMarker
+
+    return FrontierMarker(
+        label=label, expected_return_21=0.04, volatility_21=0.05, sharpe_21=0.6,
+        provenance="official_phase7_persisted",
+    )
+
+
+def _synthetic_frontier_context():
+    """A real-dimension (50-asset), deterministic, PSD (mu, Sigma, rf) —
+    never derived from or resembling real Phase 7 data (this file must stay
+    DB-free)."""
+    n = len(config.TICKER_UNIVERSE)
+    mu_arr = np.linspace(-0.01, 0.05, n)
+    sigma_arr = np.eye(n) * 0.0004  # diagonal, PSD by construction
+    rf_21 = 0.002
+    return mu_arr, sigma_arr, rf_21
+
+
+def test_frontier_invalid_covariance_returns_400(client):
+    resp = client.get("/api/frontier", params={"covariance": "NOT_AN_ESTIMATOR"})
+    assert resp.status_code == 400
+
+
+def test_frontier_malformed_date_returns_422(client):
+    resp = client.get("/api/frontier", params={"formation_date": "not-a-date"})
+    assert resp.status_code == 422
+
+
+def test_frontier_unknown_date_returns_404(client, monkeypatch):
+    monkeypatch.setattr(frontier_module, "_official_formation_dates", lambda conn: [date(2022, 3, 28)])
+    app.dependency_overrides[get_db] = _get_db_returning([])
+    resp = client.get("/api/frontier", params={"formation_date": "2099-01-01", "covariance": "LW"})
+    assert resp.status_code == 404
+
+
+def test_frontier_no_official_dates_returns_404(client, monkeypatch):
+    monkeypatch.setattr(frontier_module, "_official_formation_dates", lambda conn: [])
+    app.dependency_overrides[get_db] = _get_db_returning([])
+    resp = client.get("/api/frontier")
+    assert resp.status_code == 404
+
+
+def test_frontier_default_date_success_shape(client, monkeypatch):
+    mu_arr, sigma_arr, rf_21 = _synthetic_frontier_context()
+    monkeypatch.setattr(frontier_module, "_official_formation_dates", lambda conn: [date(2026, 1, 2)])
+    monkeypatch.setattr(
+        frontier_module, "reconstruct_mu_sigma_rf",
+        lambda conn, fd: (mu_arr, {"SAMPLE": sigma_arr, "LW": sigma_arr}, rf_21),
+    )
+    monkeypatch.setattr(frontier_module, "_official_marker", _fake_official_marker)
+    monkeypatch.setattr(frontier_module, "N_FRONTIER_POINTS", 5)
+    app.dependency_overrides[get_db] = _get_db_returning([])
+
+    resp = client.get("/api/frontier")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["formation_date"] == "2026-01-02"
+    assert body["covariance_estimator"] == "Ledoit-Wolf"  # LW is the default
+    assert body["forecast_horizon_sessions"] == 21
+    assert body["covariance_window_sessions"] == 252
+    assert body["max_weight_constraint"] == 0.10
+    assert len(body["points"]) > 0
+    for p in body["points"]:
+        assert np.isfinite(p["expected_return_21"])
+        assert p["volatility_21"] >= 0
+    assert body["markers"]["min_vol"]["provenance"] == "official_phase7_persisted"
+    assert body["markers"]["max_sharpe"]["provenance"] == "official_phase7_persisted"
+    assert body["markers"]["equal_weight"]["provenance"] == "reconstructed_benchmark"
+    assert body["source"] == "reconstructed_from_frozen_phase7_methodology"
+
+
+def test_frontier_covariance_param_selects_matching_official_strategies(client, monkeypatch):
+    mu_arr, sigma_arr, rf_21 = _synthetic_frontier_context()
+    calls = []
+
+    def _spy_marker(conn, formation_date, strategy, label):
+        calls.append(strategy)
+        return _fake_official_marker(conn, formation_date, strategy, label)
+
+    monkeypatch.setattr(frontier_module, "_official_formation_dates", lambda conn: [date(2026, 1, 2)])
+    monkeypatch.setattr(
+        frontier_module, "reconstruct_mu_sigma_rf",
+        lambda conn, fd: (mu_arr, {"SAMPLE": sigma_arr, "LW": sigma_arr}, rf_21),
+    )
+    monkeypatch.setattr(frontier_module, "_official_marker", _spy_marker)
+    monkeypatch.setattr(frontier_module, "N_FRONTIER_POINTS", 3)
+    app.dependency_overrides[get_db] = _get_db_returning([])
+
+    resp = client.get("/api/frontier", params={"covariance": "SAMPLE"})
+    assert resp.status_code == 200
+    assert resp.json()["covariance_estimator"] == "Sample"
+    assert calls == ["SAMPLE_MINVOL", "SAMPLE_MAXSHARPE"]
+
+
+def test_frontier_equal_weight_marker_is_reconstructed_not_official(client, monkeypatch):
+    n = len(config.TICKER_UNIVERSE)
+    mu_arr = np.linspace(-0.01, 0.05, n)
+    sigma_arr = np.eye(n) * 0.0004
+    rf_21 = 0.001
+
+    monkeypatch.setattr(frontier_module, "_official_formation_dates", lambda conn: [date(2026, 1, 2)])
+    monkeypatch.setattr(
+        frontier_module, "reconstruct_mu_sigma_rf",
+        lambda conn, fd: (mu_arr, {"SAMPLE": sigma_arr, "LW": sigma_arr}, rf_21),
+    )
+    monkeypatch.setattr(frontier_module, "_official_marker", _fake_official_marker)
+    monkeypatch.setattr(frontier_module, "N_FRONTIER_POINTS", 3)
+    app.dependency_overrides[get_db] = _get_db_returning([])
+
+    resp = client.get("/api/frontier")
+    eq = resp.json()["markers"]["equal_weight"]
+    assert eq["provenance"] == "reconstructed_benchmark"
+    assert abs(eq["expected_return_21"] - float(np.mean(mu_arr))) < 1e-9
+    expected_vol = float(np.sqrt(0.0004 / n))  # w=1/n, diagonal Sigma -> var = mean(diag)/n
+    assert abs(eq["volatility_21"] - expected_vol) < 1e-9
+    # Never implied to lie on the frontier — no such claim in the payload.
+    assert "on_frontier" not in eq and "is_efficient" not in eq
+
+
+def test_frontier_points_exclude_the_dominated_lower_branch(client, monkeypatch):
+    """A page titled "Efficient Frontier" must never present the dominated
+    (inefficient) branch of the minimum-variance parabola — for every
+    returned point, no OTHER returned point has strictly lower volatility
+    AND strictly higher return (the textbook non-domination property)."""
+    mu_arr, sigma_arr, rf_21 = _synthetic_frontier_context()
+    monkeypatch.setattr(frontier_module, "_official_formation_dates", lambda conn: [date(2026, 1, 2)])
+    monkeypatch.setattr(
+        frontier_module, "reconstruct_mu_sigma_rf",
+        lambda conn, fd: (mu_arr, {"SAMPLE": sigma_arr, "LW": sigma_arr}, rf_21),
+    )
+    monkeypatch.setattr(frontier_module, "_official_marker", _fake_official_marker)
+    monkeypatch.setattr(frontier_module, "N_FRONTIER_POINTS", 9)
+    app.dependency_overrides[get_db] = _get_db_returning([])
+
+    resp = client.get("/api/frontier")
+    points = resp.json()["points"]
+    assert len(points) > 1
+    # Ascending target-return sweep -> volatility must be non-decreasing
+    # too (monotonic upper branch), never dipping back down.
+    vols = [p["volatility_21"] for p in points]
+    assert vols == sorted(vols)
+    rets = [p["expected_return_21"] for p in points]
+    assert rets == sorted(rets)
+
+
+def test_frontier_response_schema_is_lean_no_weight_matrices():
+    from app.schemas import FrontierMarkers, FrontierPoint
+
+    assert set(FrontierPoint.model_fields.keys()) == {"expected_return_21", "volatility_21", "sharpe_21"}
+    assert set(FrontierMarkers.model_fields.keys()) == {"min_vol", "max_sharpe", "equal_weight"}  # no "spxt" field
+
+
+def test_frontier_route_never_imports_stage_b_or_spxt_modules():
+    """§20 causality guarantee, statically enforced: the frontier route's
+    own import statements never reference Stage-B (realized-return) or
+    SPXT (evaluation-only benchmark) code. Uses `ast` rather than a plain
+    text search so the module's own explanatory docstring/comments (which
+    legitimately mention these names to document the exclusion) can never
+    cause a false failure."""
+    path = pathlib.Path(__file__).resolve().parent.parent / "app" / "routes" / "frontier.py"
+    tree = ast.parse(path.read_text())
+    imported_names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            imported_names.add(module)
+            imported_names.update(f"{module}.{alias.name}" for alias in node.names)
+            imported_names.update(alias.name for alias in node.names)
+    forbidden = {
+        "optimizer.benchmark_spxt", "benchmark_spxt", "spxt_total_return",
+        "optimizer.walkforward", "realized_stock_returns", "realized_portfolio_return",
+    }
+    hit = imported_names & forbidden
+    assert not hit, f"frontier.py imports forbidden Stage-B/SPXT symbol(s): {hit}"
+
+
+def test_frontier_module_namespace_has_no_stage_b_or_spxt_symbols():
+    forbidden = {"realized_stock_returns", "realized_portfolio_return", "spxt_total_return", "spxt_raw"}
+    names = set(vars(frontier_module).keys())
+    assert not (names & forbidden), f"frontier module namespace unexpectedly binds: {names & forbidden}"
 
 
 # ---------------------------------------------------------------------------

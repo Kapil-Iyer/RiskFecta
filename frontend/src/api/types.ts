@@ -175,3 +175,49 @@ export interface PortfolioResponse {
   evaluation: PortfolioEvaluationMetrics;
   source: string;
 }
+
+/** One reconstructed constrained-efficient-frontier point at formation
+ * time — always ex-ante. `sharpe_21` is `null` only when volatility is
+ * exactly zero. */
+export interface FrontierPoint {
+  expected_return_21: number;
+  volatility_21: number;
+  sharpe_21: number | null;
+}
+
+/** A named reference point on the frontier chart.
+ * `provenance: "official_phase7_persisted"` (Min-Vol/Max-Sharpe) means the
+ * coordinates are the OFFICIAL persisted Phase 7 metrics — never a
+ * freshly re-optimized copy. `provenance: "reconstructed_benchmark"`
+ * (Equal Weight) means the exact conceptual 1/50 weights, with
+ * expected-return/volatility recomputed from the same request's
+ * reconstructed mu_21/Sigma_21 — Equal Weight is never implied to lie on
+ * the frontier. */
+export interface FrontierMarker {
+  label: string;
+  expected_return_21: number;
+  volatility_21: number;
+  sharpe_21: number | null;
+  provenance: "official_phase7_persisted" | "reconstructed_benchmark";
+}
+
+export interface FrontierMarkers {
+  min_vol: FrontierMarker;
+  max_sharpe: FrontierMarker;
+  equal_weight: FrontierMarker;
+}
+
+/** Full body of GET /api/frontier — reconstructed (never persisted) at
+ * one historical Phase 7 formation date. Entirely construction-time /
+ * ex-ante; never a realized/future value anywhere in this shape. */
+export interface FrontierResponse {
+  formation_date: string;
+  covariance_estimator: "Sample" | "Ledoit-Wolf";
+  forecast_horizon_sessions: number;
+  covariance_window_sessions: number;
+  max_weight_constraint: number;
+  risk_free_rate_21: number;
+  points: FrontierPoint[];
+  markers: FrontierMarkers;
+  source: string;
+}

@@ -19,6 +19,7 @@ vi.mock("./api/client", async () => {
     getPortfolioDates: vi.fn(),
     getPortfolioStrategies: vi.fn(),
     getPortfolio: vi.fn(),
+    getFrontier: vi.fn(),
   };
 });
 
@@ -106,11 +107,12 @@ describe("App routing shell", () => {
     await user.click(screen.getByRole("link", { name: "Methodology" }));
     expect(await screen.findByRole("heading", { name: /Methodology & roadmap/ })).toBeInTheDocument();
 
-    // Efficient Frontier is still a not-yet-built Coming Soon surface
-    // (Forecast Rankings, Model Comparison, and Portfolio Construction each
-    // have their own dedicated test suites in pages/*.test.tsx).
-    await user.click(screen.getByRole("link", { name: "Efficient Frontier" }));
-    expect(await screen.findByRole("heading", { name: "Efficient Frontier" })).toBeInTheDocument();
+    // Risk Analytics is still a not-yet-built Coming Soon surface
+    // (Forecast Rankings, Model Comparison, Portfolio Construction, and
+    // Efficient Frontier each have their own dedicated test suites in
+    // pages/*.test.tsx).
+    await user.click(screen.getByRole("link", { name: "Risk Analytics" }));
+    expect(await screen.findByRole("heading", { name: "Risk Analytics" })).toBeInTheDocument();
     // A not-yet-built surface must never show fabricated numbers/charts.
     expect(document.querySelector(".chart")).not.toBeInTheDocument();
     expect(screen.getByText(/not yet implemented/)).toBeInTheDocument();

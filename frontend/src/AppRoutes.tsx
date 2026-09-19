@@ -5,6 +5,7 @@ import UniversePage from "./pages/UniversePage";
 import ForecastRankingsPage from "./pages/ForecastRankingsPage";
 import ModelComparisonPage from "./pages/ModelComparisonPage";
 import PortfolioConstructionPage from "./pages/PortfolioConstructionPage";
+import FrontierPage from "./pages/FrontierPage";
 import MethodologyPage from "./pages/MethodologyPage";
 import ComingSoonPage from "./pages/ComingSoonPage";
 
@@ -20,15 +21,7 @@ export default function AppRoutes() {
         <Route path="/forecasts" element={<ForecastRankingsPage />} />
         <Route path="/models" element={<ModelComparisonPage />} />
         <Route path="/portfolio" element={<PortfolioConstructionPage />} />
-        <Route
-          path="/frontier"
-          element={
-            <ComingSoonPage
-              title="Efficient Frontier"
-              description="Interactive risk/return frontier with minimum-volatility, maximum-Sharpe, and benchmark markers."
-            />
-          }
-        />
+        <Route path="/frontier" element={<FrontierPage />} />
         <Route
           path="/risk"
           element={

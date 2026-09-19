@@ -194,3 +194,56 @@ class PortfolioResponse(BaseModel):
     construction: PortfolioConstructionMetrics
     evaluation: PortfolioEvaluationMetrics
     source: str
+
+
+class FrontierPoint(BaseModel):
+    """One reconstructed constrained-efficient-frontier point at formation
+    time (`app/routes/frontier.py`) — always ex-ante. `sharpe_21` is
+    `None` only when volatility is exactly zero (never a divide-by-zero)."""
+
+    expected_return_21: float
+    volatility_21: float
+    sharpe_21: Optional[float] = None
+
+
+class FrontierMarker(BaseModel):
+    """A named reference point on the frontier chart.
+
+    Min-Vol/Max-Sharpe markers carry `provenance="official_phase7_persisted"`
+    — their coordinates are the OFFICIAL persisted Phase 7
+    `target_return`/`portfolio_vol`/`sharpe_ratio`, read directly, never a
+    freshly re-optimized copy. Equal Weight carries
+    `provenance="reconstructed_benchmark"` — its weights are the exact
+    conceptual 1/50 benchmark, but its coordinates are recomputed from the
+    SAME request's reconstructed mu_21/Sigma_21 so they sit in the curve's
+    coordinate system. Equal Weight is never implied to lie on the
+    frontier."""
+
+    label: str
+    expected_return_21: float
+    volatility_21: float
+    sharpe_21: Optional[float] = None
+    provenance: str
+
+
+class FrontierMarkers(BaseModel):
+    min_vol: FrontierMarker
+    max_sharpe: FrontierMarker
+    equal_weight: FrontierMarker
+
+
+class FrontierResponse(BaseModel):
+    """Reconstructed (never persisted) Phase 7 efficient frontier at one
+    historical formation date. Entirely construction-time / ex-ante — see
+    app/routes/frontier.py for the exact reconstruction path and the
+    causality guarantee."""
+
+    formation_date: date
+    covariance_estimator: str  # "Sample" | "Ledoit-Wolf"
+    forecast_horizon_sessions: int
+    covariance_window_sessions: int
+    max_weight_constraint: float
+    risk_free_rate_21: float
+    points: List[FrontierPoint]
+    markers: FrontierMarkers
+    source: str

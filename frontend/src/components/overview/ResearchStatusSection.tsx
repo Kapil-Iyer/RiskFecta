@@ -15,7 +15,9 @@ interface StatusColumn {
   items: string[];
 }
 
-const DASHBOARD_LIVE_PATHS = new Set(["/", "/universe", "/forecasts", "/models", "/portfolio", "/methodology"]);
+const DASHBOARD_LIVE_PATHS = new Set([
+  "/", "/universe", "/forecasts", "/models", "/portfolio", "/frontier", "/methodology",
+]);
 
 /**
  * Replaces the old `BuildStatusSection` with a clearer three-way split:

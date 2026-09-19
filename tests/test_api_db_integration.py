@@ -11,11 +11,16 @@ from __future__ import annotations
 
 import os
 
+import numpy as np
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
 import config
 from app.main import app
+from app.routes import frontier
+from optimizer.persistence import build_run_id
+from optimizer.portfolio import portfolio_expected_return, portfolio_sharpe, portfolio_volatility
 from pipeline import db
 
 pytestmark = pytest.mark.db
@@ -354,6 +359,162 @@ def test_portfolio_malformed_date_returns_422(client):
 
 
 @_skip_no_db
+def test_frontier_excluded_prediction_only_date_returns_404(client):
+    resp = client.get("/api/frontier", params={"formation_date": "2022-02-25", "covariance": "LW"})
+    assert resp.status_code == 404
+
+
+@_skip_no_db
+def test_frontier_unknown_future_date_returns_404(client):
+    resp = client.get("/api/frontier", params={"formation_date": "2099-01-01"})
+    assert resp.status_code == 404
+
+
+@_skip_no_db
+def test_frontier_invalid_covariance_returns_400(client):
+    resp = client.get("/api/frontier", params={"formation_date": EXPECTED_LAST_PORTFOLIO_DATE, "covariance": "BAD"})
+    assert resp.status_code == 400
+
+
+@_skip_no_db
+def test_frontier_causal_prices_never_include_post_formation_dates(client):
+    """§20 causality — real behavioral proof: the exact SQL cutoff this
+    route uses never returns a row dated after `formation_date`, against
+    the real `prices_raw` table (through 2026-02-27)."""
+    conn = db.get_connection()
+    try:
+        formation_date = pd.Timestamp(EXPECTED_LAST_PORTFOLIO_DATE)
+        prices = frontier._load_causal_prices(conn, formation_date.date())
+        assert len(prices) > 0
+        assert prices["date"].max() <= formation_date
+    finally:
+        conn.close()
+
+
+@_skip_no_db
+def test_frontier_never_calls_stage_b_realized_return_helpers(client, monkeypatch):
+    """§20 causality — behavioral trap: if the reconstruction path ever
+    called a Stage-B (realized-return) helper, this would raise. It must
+    complete cleanly, proving the call graph genuinely never reaches
+    Stage B (not merely that this module happens not to import it)."""
+    import optimizer.walkforward as wf
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("frontier reconstruction must never call a Stage-B realized-return helper")
+
+    monkeypatch.setattr(wf, "realized_stock_returns", _boom)
+    monkeypatch.setattr(wf, "realized_portfolio_return", _boom)
+
+    conn = db.get_connection()
+    try:
+        mu_arr, sigma_by_est, rf_21 = frontier.reconstruct_mu_sigma_rf(conn, EXPECTED_LAST_PORTFOLIO_DATE)
+        assert np.isfinite(mu_arr).all()
+        assert np.isfinite(rf_21)
+    finally:
+        conn.close()
+
+
+# Real Phase 7 NUMERIC column precision (schema.sql): target_return/
+# portfolio_vol are NUMERIC(8,6) (storage rounding up to 5e-7), sharpe_ratio
+# is NUMERIC(8,4) (storage rounding up to 5e-5) — tolerances below are set
+# just above those storage-precision bounds, never loosened to paper over a
+# genuine reconstruction mismatch.
+_RECONCILE_TOL_RETURN = 1e-5
+_RECONCILE_TOL_VOL = 1e-5
+_RECONCILE_TOL_SHARPE = 1e-3
+
+
+@_skip_no_db
+@pytest.mark.parametrize(
+    "formation_date_key",
+    ["first", "middle", "last"],
+)
+def test_frontier_reconciles_against_official_persisted_minvol_maxsharpe(client, formation_date_key):
+    """§6/§21 — the mandatory reconciliation check: recompute expected
+    return / volatility / Sharpe from THIS reconstructed mu_21/Sigma_21/
+    rf_21 and the OFFICIAL persisted Min-Vol/Max-Sharpe weights, and
+    compare against the OFFICIAL persisted target_return/portfolio_vol/
+    sharpe_ratio. A material mismatch here would mean the frontier's own
+    axes disagree with the frozen Phase 7 result — never something to
+    paper over by loosening tolerance."""
+    dates_resp = client.get("/api/portfolios/dates")
+    dates = dates_resp.json()
+    formation_date = {"first": dates[0], "middle": dates[len(dates) // 2], "last": dates[-1]}[formation_date_key]
+
+    conn = db.get_connection()
+    try:
+        mu_arr, sigma_by_est, rf_21 = frontier.reconstruct_mu_sigma_rf(conn, formation_date)
+
+        max_d_ret = max_d_vol = max_d_sharpe = 0.0
+        for estimator in ("SAMPLE", "LW"):
+            sigma_arr = sigma_by_est[estimator]
+            for strategy in (f"{estimator}_MINVOL", f"{estimator}_MAXSHARPE"):
+                run_id = build_run_id("p7bv1", strategy, formation_date)
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT ticker, weight, target_return, portfolio_vol, sharpe_ratio "
+                        "FROM portfolios WHERE run_id = %s ORDER BY ticker",
+                        (run_id,),
+                    )
+                    rows = cur.fetchall()
+                assert len(rows) == 50
+                w = pd.Series({r[0]: float(r[1]) for r in rows}).reindex(config.TICKER_UNIVERSE).to_numpy()
+                official_ret, official_vol, official_sharpe = float(rows[0][2]), float(rows[0][3]), float(rows[0][4])
+
+                recon_ret = portfolio_expected_return(w, mu_arr)
+                recon_vol = portfolio_volatility(w, sigma_arr)
+                recon_sharpe = portfolio_sharpe(w, mu_arr, sigma_arr, rf_21)
+
+                max_d_ret = max(max_d_ret, abs(recon_ret - official_ret))
+                max_d_vol = max(max_d_vol, abs(recon_vol - official_vol))
+                max_d_sharpe = max(max_d_sharpe, abs(recon_sharpe - official_sharpe))
+
+        assert max_d_ret < _RECONCILE_TOL_RETURN, f"expected-return reconciliation drift: {max_d_ret}"
+        assert max_d_vol < _RECONCILE_TOL_VOL, f"volatility reconciliation drift: {max_d_vol}"
+        assert max_d_sharpe < _RECONCILE_TOL_SHARPE, f"sharpe reconciliation drift: {max_d_sharpe}"
+    finally:
+        conn.close()
+
+
+@_skip_no_db
+@pytest.mark.parametrize("covariance", ["LW", "SAMPLE"])
+def test_frontier_end_to_end_latest_date_produces_valid_dense_curve(client, covariance):
+    """Full end-to-end (real DB, real SLSQP sweep) smoke test — deliberately
+    run only at the latest date, once per estimator (this path costs
+    roughly 15-20s per call; see the Phase 8C Efficient Frontier report's
+    measured runtime). Confirms: a reasonably dense feasible curve, every
+    point finite with non-negative volatility, and official markers
+    present with correct provenance — never a fabricated/interpolated
+    point for a target the solver could not reach."""
+    resp = client.get("/api/frontier", params={"formation_date": EXPECTED_LAST_PORTFOLIO_DATE, "covariance": covariance})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["formation_date"] == EXPECTED_LAST_PORTFOLIO_DATE
+    assert body["covariance_estimator"] == ("Ledoit-Wolf" if covariance == "LW" else "Sample")
+
+    points = body["points"]
+    assert len(points) >= 30  # "reasonably dense" per the task brief's 30-60 guidance
+    vols = [p["volatility_21"] for p in points]
+    rets = [p["expected_return_21"] for p in points]
+    assert all(v >= 0 for v in vols)
+    assert all(np.isfinite(v) and np.isfinite(r) for v, r in zip(vols, rets))
+
+    min_vol_marker = body["markers"]["min_vol"]
+    max_sharpe_marker = body["markers"]["max_sharpe"]
+    equal_weight_marker = body["markers"]["equal_weight"]
+    assert min_vol_marker["provenance"] == "official_phase7_persisted"
+    assert max_sharpe_marker["provenance"] == "official_phase7_persisted"
+    assert equal_weight_marker["provenance"] == "reconstructed_benchmark"
+
+    # The official Min-Vol marker's volatility should sit at or very near
+    # the low end of the reconstructed curve's volatility range — the same
+    # numerical tolerance class as the dedicated reconciliation test, never
+    # an exact-equality assumption (the curve is a discrete grid, official
+    # Min-Vol need not land exactly on a grid point).
+    assert min_vol_marker["volatility_21"] <= min(vols) + 5e-3
+
+
+@_skip_no_db
 def test_future_phase_tables_remain_unchanged_after_api_use(client):
     """Phase 2A read-only API must not mutate later-phase research tables.
 
@@ -383,6 +544,10 @@ def test_future_phase_tables_remain_unchanged_after_api_use(client):
     client.get("/api/portfolios/strategies")
     client.get("/api/portfolios")
     client.get("/api/portfolios", params={"formation_date": "2022-03-28", "strategy": "EQUAL_WEIGHT"})
+    # Deliberately just one full (real SLSQP sweep) frontier call — this
+    # path costs ~15-20s; the dedicated frontier tests above already cover
+    # both estimators and multiple dates.
+    client.get("/api/frontier", params={"formation_date": "2022-03-28", "covariance": "LW"})
 
     conn = db.get_connection()
     try:
