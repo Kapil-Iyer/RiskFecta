@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 import config
 from app.main import app
-from app.routes import frontier
+from app.routes import frontier, risk
 from optimizer.persistence import build_run_id
 from optimizer.portfolio import portfolio_expected_return, portfolio_sharpe, portfolio_volatility
 from pipeline import db
@@ -514,6 +514,172 @@ def test_frontier_end_to_end_latest_date_produces_valid_dense_curve(client, cova
     assert min_vol_marker["volatility_21"] <= min(vols) + 5e-3
 
 
+# ---------------------------------------------------------------------------
+# Risk Analytics (Phase 8D-1) — formation-time component risk contribution.
+# Reuses `frontier.reconstruct_mu_sigma_rf` for covariance (no second
+# implementation), so these tests focus on: the volatility reconciliation
+# (the core integrity test for this slice), the RC/risk-share/sector
+# identities on REAL data, causality, and strategy/covariance provenance.
+# ---------------------------------------------------------------------------
+@_skip_no_db
+def test_risk_excluded_prediction_only_date_returns_404(client):
+    resp = client.get("/api/risk", params={"formation_date": "2022-02-25", "strategy": "LW_MAXSHARPE"})
+    assert resp.status_code == 404
+
+
+@_skip_no_db
+def test_risk_unknown_future_date_returns_404(client):
+    resp = client.get("/api/risk", params={"formation_date": "2099-01-01"})
+    assert resp.status_code == 404
+
+
+@_skip_no_db
+def test_risk_invalid_strategy_returns_400(client):
+    resp = client.get("/api/risk", params={"formation_date": EXPECTED_LAST_PORTFOLIO_DATE, "strategy": "NOT_A_STRATEGY"})
+    assert resp.status_code == 400
+
+
+@_skip_no_db
+def test_risk_mismatched_covariance_for_optimized_strategy_returns_400(client):
+    resp = client.get(
+        "/api/risk",
+        params={"formation_date": EXPECTED_LAST_PORTFOLIO_DATE, "strategy": "SAMPLE_MINVOL", "covariance": "LW"},
+    )
+    assert resp.status_code == 400
+
+
+@_skip_no_db
+def test_risk_never_calls_stage_b_realized_return_helpers(client, monkeypatch):
+    """Behavioral causality trap (same pattern as the Frontier causality
+    test): if Risk Analytics' reconstruction path ever called a Stage-B
+    (realized-return) helper, this would raise. It must return 200,
+    proving the call graph genuinely never reaches Stage B."""
+    import optimizer.walkforward as wf
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("risk reconstruction must never call a Stage-B realized-return helper")
+
+    monkeypatch.setattr(wf, "realized_stock_returns", _boom)
+    monkeypatch.setattr(wf, "realized_portfolio_return", _boom)
+
+    resp = client.get("/api/risk", params={"formation_date": EXPECTED_LAST_PORTFOLIO_DATE, "strategy": "LW_MAXSHARPE"})
+    assert resp.status_code == 200
+
+
+@_skip_no_db
+@pytest.mark.parametrize(
+    "formation_date_key,strategy",
+    [
+        ("first", "SAMPLE_MINVOL"),
+        ("first", "LW_MAXSHARPE"),
+        ("middle", "LW_MINVOL"),
+        ("middle", "SAMPLE_MAXSHARPE"),
+        ("last", "SAMPLE_MINVOL"),
+        ("last", "LW_MAXSHARPE"),
+    ],
+)
+def test_risk_reconstructed_volatility_reconciles_with_official_persisted_portfolio_vol(client, formation_date_key, strategy):
+    """§5 — the core integrity test for this slice: recompute
+    sigma_p = sqrt(w^T Sigma_21 w) from the official persisted weights and
+    THIS route's reconstructed Sigma_21, and compare to the official
+    persisted `portfolios.portfolio_vol`. Tolerance is set just above
+    `portfolio_vol`'s NUMERIC(8,6) DB storage-precision bound (schema.sql),
+    matching the same justified tolerance the Frontier reconciliation test
+    uses for the identical comparison."""
+    dates_resp = client.get("/api/portfolios/dates")
+    dates = dates_resp.json()
+    formation_date = {"first": dates[0], "middle": dates[len(dates) // 2], "last": dates[-1]}[formation_date_key]
+
+    resp = client.get("/api/risk", params={"formation_date": formation_date, "strategy": strategy})
+    assert resp.status_code == 200
+    reconstructed_vol = resp.json()["portfolio"]["predicted_volatility_21"]
+
+    run_id = build_run_id("p7bv1", strategy, formation_date)
+    conn = db.get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT portfolio_vol FROM portfolios WHERE run_id = %s LIMIT 1", (run_id,))
+            official_vol = float(cur.fetchone()[0])
+    finally:
+        conn.close()
+
+    assert abs(reconstructed_vol - official_vol) < 1e-5, (
+        f"{formation_date} {strategy}: reconstructed={reconstructed_vol} official={official_vol}"
+    )
+
+
+@_skip_no_db
+@pytest.mark.parametrize("strategy", ["LW_MAXSHARPE", "SAMPLE_MINVOL", "EQUAL_WEIGHT"])
+def test_risk_identities_hold_on_real_official_portfolios(client, strategy):
+    """RC sum, risk-share sum, and sector-aggregation identities, verified
+    against real official Phase 7 data (not just synthetic fixtures)."""
+    resp = client.get("/api/risk", params={"formation_date": EXPECTED_LAST_PORTFOLIO_DATE, "strategy": strategy})
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert len(body["assets"]) == 50
+    tickers = [a["ticker"] for a in body["assets"]]
+    assert set(tickers) == set(config.TICKER_UNIVERSE)
+    weight_sum = sum(a["weight"] for a in body["assets"])
+    assert abs(weight_sum - 1.0) < 1e-4
+
+    sigma_p = body["portfolio"]["predicted_volatility_21"]
+    assert sigma_p > 0
+    assert all(np.isfinite(a["component_risk_contribution"]) and np.isfinite(a["risk_share"]) for a in body["assets"])
+
+    rc_sum = sum(a["component_risk_contribution"] for a in body["assets"])
+    assert abs(rc_sum - sigma_p) < 1e-4
+
+    share_sum = sum(a["risk_share"] for a in body["assets"])
+    assert abs(share_sum - 1.0) < 1e-4
+
+    assert len(body["sectors"]) == 2
+    assert {s["sector"] for s in body["sectors"]} == {"Information Technology", "Financials"}
+    sector_rc_sum = sum(s["component_risk_contribution"] for s in body["sectors"])
+    assert abs(sector_rc_sum - sigma_p) < 1e-4
+    sector_weight_sum = sum(s["weight"] for s in body["sectors"])
+    assert abs(sector_weight_sum - 1.0) < 1e-4
+
+    if strategy == "EQUAL_WEIGHT":
+        assert body["portfolio"]["max_weight_constraint"] is None
+        assert all(abs(a["weight"] - 1.0 / 50) < 1e-9 for a in body["assets"])
+    else:
+        assert body["portfolio"]["max_weight_constraint"] == 0.10
+        assert all(a["weight"] <= 0.10 + 1e-6 for a in body["assets"])
+
+
+@_skip_no_db
+def test_risk_strategy_determines_covariance_provenance_truthfully(client):
+    for strategy, expected_estimator in [
+        ("SAMPLE_MINVOL", "Sample"),
+        ("SAMPLE_MAXSHARPE", "Sample"),
+        ("LW_MINVOL", "Ledoit-Wolf"),
+        ("LW_MAXSHARPE", "Ledoit-Wolf"),
+    ]:
+        resp = client.get("/api/risk", params={"formation_date": EXPECTED_LAST_PORTFOLIO_DATE, "strategy": strategy})
+        assert resp.status_code == 200
+        assert resp.json()["covariance_estimator"] == expected_estimator
+
+
+@_skip_no_db
+def test_risk_equal_weight_covariance_selector_changes_result_without_reoptimizing_weights(client):
+    resp_lw = client.get("/api/risk", params={"formation_date": EXPECTED_LAST_PORTFOLIO_DATE, "strategy": "EQUAL_WEIGHT", "covariance": "LW"})
+    resp_sample = client.get("/api/risk", params={"formation_date": EXPECTED_LAST_PORTFOLIO_DATE, "strategy": "EQUAL_WEIGHT", "covariance": "SAMPLE"})
+    assert resp_lw.status_code == 200 and resp_sample.status_code == 200
+    body_lw, body_sample = resp_lw.json(), resp_sample.json()
+
+    # Weights are the fixed conceptual 1/50 benchmark regardless of the
+    # covariance chosen for risk ANALYSIS — never reoptimized.
+    weights_lw = {a["ticker"]: a["weight"] for a in body_lw["assets"]}
+    weights_sample = {a["ticker"]: a["weight"] for a in body_sample["assets"]}
+    assert weights_lw == weights_sample
+    assert all(abs(w - 1.0 / 50) < 1e-9 for w in weights_lw.values())
+
+    # But the resulting predicted volatility differs (real historical
+    # Sample vs. Ledoit-Wolf covariances are not identical).
+    assert body_lw["portfolio"]["predicted_volatility_21"] != body_sample["portfolio"]["predicted_volatility_21"]
+
+
 @_skip_no_db
 def test_future_phase_tables_remain_unchanged_after_api_use(client):
     """Phase 2A read-only API must not mutate later-phase research tables.
@@ -548,6 +714,8 @@ def test_future_phase_tables_remain_unchanged_after_api_use(client):
     # path costs ~15-20s; the dedicated frontier tests above already cover
     # both estimators and multiple dates.
     client.get("/api/frontier", params={"formation_date": "2022-03-28", "covariance": "LW"})
+    client.get("/api/risk", params={"formation_date": "2022-03-28", "strategy": "LW_MAXSHARPE"})
+    client.get("/api/risk", params={"formation_date": "2022-03-28", "strategy": "EQUAL_WEIGHT", "covariance": "SAMPLE"})
 
     conn = db.get_connection()
     try:

@@ -247,3 +247,71 @@ class FrontierResponse(BaseModel):
     points: List[FrontierPoint]
     markers: FrontierMarkers
     source: str
+
+
+class AssetRiskRow(BaseModel):
+    """One ticker's formation-time risk decomposition within an official
+    Phase 7 portfolio (`app/routes/risk.py`). `component_risk_contribution`
+    (RC_i = w_i * (Sigma_21 w)_i / sigma_p) is the AUTHORITATIVE
+    decomposition, in the same volatility units as the portfolio's
+    predicted volatility — summing it across all 50 assets reproduces
+    `portfolio.predicted_volatility_21` exactly (within numerical
+    tolerance). It is NEVER clamped/abs'd/renormalized: a genuine
+    diversifying position can carry a negative contribution, and that
+    sign is preserved. `risk_share` (`RC_i / sigma_p`) is a convenience
+    normalization for UI display only — never the authoritative figure."""
+
+    ticker: str
+    sector: str
+    weight: float
+    marginal_risk_contribution: float
+    component_risk_contribution: float
+    risk_share: float
+
+
+class SectorRiskRow(BaseModel):
+    """Sector aggregate: sum of `AssetRiskRow.component_risk_contribution`
+    across every asset in that sector — valid because component
+    contributions are additive by construction (no separate sector
+    covariance model is estimated)."""
+
+    sector: str
+    weight: float
+    component_risk_contribution: float
+    risk_share: float
+
+
+class PortfolioRiskSummary(BaseModel):
+    """`max_weight_constraint` is `None` for EQUAL_WEIGHT (a benchmark,
+    never routed through MAX_WEIGHT) — same convention as
+    `PortfolioResponse.max_weight_constraint`. `effective_holdings` =
+    `1 / concentration_hhi` (the number of equally-weighted names that
+    would produce the same HHI) — a direct, transparent function of HHI,
+    not a new methodology."""
+
+    predicted_volatility_21: float
+    largest_weight: float
+    active_holdings_count: int
+    concentration_hhi: float
+    effective_holdings: float
+    max_weight_constraint: Optional[float] = None
+
+
+class RiskResponse(BaseModel):
+    """Formation-time (ex-ante) risk decomposition of an official Phase 7
+    portfolio — never realized/ex-post figures (no `realized_return_21`,
+    no SPXT, no turnover). `covariance_estimator` is DETERMINED by
+    `strategy` for the four optimized strategies (Sample_MinVol/MaxSharpe
+    -> "Sample", LW_MinVol/MaxSharpe -> "Ledoit-Wolf") and is a genuine
+    user choice only for EQUAL_WEIGHT, which has no covariance identity
+    of its own (see app/routes/risk.py's Equal Weight handling)."""
+
+    formation_date: date
+    strategy: StrategyInfo
+    covariance_estimator: str  # "Sample" | "Ledoit-Wolf"
+    forecast_horizon_sessions: int
+    covariance_window_sessions: int
+    portfolio: PortfolioRiskSummary
+    assets: List[AssetRiskRow]
+    sectors: List[SectorRiskRow]
+    source: str

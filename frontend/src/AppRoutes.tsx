@@ -6,6 +6,7 @@ import ForecastRankingsPage from "./pages/ForecastRankingsPage";
 import ModelComparisonPage from "./pages/ModelComparisonPage";
 import PortfolioConstructionPage from "./pages/PortfolioConstructionPage";
 import FrontierPage from "./pages/FrontierPage";
+import RiskAnalyticsPage from "./pages/RiskAnalyticsPage";
 import MethodologyPage from "./pages/MethodologyPage";
 import ComingSoonPage from "./pages/ComingSoonPage";
 
@@ -22,15 +23,7 @@ export default function AppRoutes() {
         <Route path="/models" element={<ModelComparisonPage />} />
         <Route path="/portfolio" element={<PortfolioConstructionPage />} />
         <Route path="/frontier" element={<FrontierPage />} />
-        <Route
-          path="/risk"
-          element={
-            <ComingSoonPage
-              title="Risk Analytics"
-              description="Portfolio volatility, concentration, and per-asset risk contribution."
-            />
-          }
-        />
+        <Route path="/risk" element={<RiskAnalyticsPage />} />
         <Route
           path="/backtest"
           element={

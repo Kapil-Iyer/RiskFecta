@@ -16,7 +16,7 @@ interface StatusColumn {
 }
 
 const DASHBOARD_LIVE_PATHS = new Set([
-  "/", "/universe", "/forecasts", "/models", "/portfolio", "/frontier", "/methodology",
+  "/", "/universe", "/forecasts", "/models", "/portfolio", "/frontier", "/risk", "/methodology",
 ]);
 
 /**

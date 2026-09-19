@@ -24,6 +24,7 @@ import config
 from app.db import get_db
 from app.main import app
 from app.routes import frontier as frontier_module
+from app.routes import risk as risk_module
 
 _SQL_MUTATION_KEYWORDS = re.compile(r"\b(insert\s+into|update\s+\w+\s+set|delete\s+from|drop\s+table|truncate|alter\s+table)\b")
 
@@ -701,6 +702,252 @@ def test_frontier_module_namespace_has_no_stage_b_or_spxt_symbols():
     forbidden = {"realized_stock_returns", "realized_portfolio_return", "spxt_total_return", "spxt_raw"}
     names = set(vars(frontier_module).keys())
     assert not (names & forbidden), f"frontier module namespace unexpectedly binds: {names & forbidden}"
+
+
+# ---------------------------------------------------------------------------
+# Risk Analytics (formation-time component risk contribution — Phase 8D-1).
+# Reuses `app.routes.frontier.reconstruct_mu_sigma_rf` for covariance, so the
+# numeric reconciliation/causality proof lives in
+# tests/test_api_db_integration.py against the real database. These are
+# pure route-level unit tests: validation, wiring, response shape, and
+# strategy/covariance provenance. Boundary functions
+# (`_official_formation_dates`, `reconstruct_mu_sigma_rf`,
+# `_load_official_weights`) are monkeypatched with small synthetic (but
+# real-dimension) data.
+# ---------------------------------------------------------------------------
+def _equal_weights_50():
+    n = len(config.TICKER_UNIVERSE)
+    return np.full(n, 1.0 / n)
+
+
+def _concentrated_optimized_weights_50():
+    """10 names at exactly the 10% cap, the rest 0 — satisfies MAX_WEIGHT
+    and sums to 1, matching the shape of a real optimized strategy."""
+    n = len(config.TICKER_UNIVERSE)
+    w = np.zeros(n)
+    w[:10] = 0.10
+    return w
+
+
+def _synthetic_hedge_sigma():
+    """A genuinely PSD 50x50 covariance where asset 0 has a NEGATIVE factor
+    loading against the common factor everyone else shares — a "hedge"
+    asset whose component risk contribution to an equal-weight portfolio
+    is provably negative. Verified numerically before use (see the Phase
+    8D-1 report): RC[0] < 0, sum(RC) == sigma_p, matrix PSD."""
+    n = len(config.TICKER_UNIVERSE)
+    b = np.full(n, 0.02)
+    b[0] = -0.1
+    return np.outer(b, b) + np.eye(n) * 1e-6
+
+
+def test_risk_invalid_strategy_returns_400(client):
+    resp = client.get("/api/risk", params={"strategy": "NOT_A_STRATEGY"})
+    assert resp.status_code == 400
+
+
+def test_risk_invalid_covariance_returns_400(client):
+    resp = client.get("/api/risk", params={"covariance": "NOT_AN_ESTIMATOR"})
+    assert resp.status_code == 400
+
+
+def test_risk_malformed_date_returns_422(client):
+    resp = client.get("/api/risk", params={"formation_date": "not-a-date"})
+    assert resp.status_code == 422
+
+
+def test_risk_unknown_date_returns_404(client, monkeypatch):
+    monkeypatch.setattr(risk_module, "_official_formation_dates", lambda conn: [date(2022, 3, 28)])
+    app.dependency_overrides[get_db] = _get_db_returning([])
+    resp = client.get("/api/risk", params={"formation_date": "2099-01-01"})
+    assert resp.status_code == 404
+
+
+def test_risk_mismatched_covariance_for_optimized_strategy_returns_400(client, monkeypatch):
+    """§7 — never let a client silently analyze an official optimized
+    portfolio under a different covariance estimator than it was actually
+    constructed under."""
+    monkeypatch.setattr(risk_module, "_official_formation_dates", lambda conn: [date(2026, 1, 2)])
+    app.dependency_overrides[get_db] = _get_db_returning([])
+    resp = client.get("/api/risk", params={"strategy": "LW_MAXSHARPE", "covariance": "SAMPLE"})
+    assert resp.status_code == 400
+    assert "misrepresent" in resp.json()["detail"]
+
+
+def test_risk_default_date_and_strategy_success_shape(client, monkeypatch):
+    mu_arr, sigma_arr, rf_21 = _synthetic_frontier_context()
+    w = _concentrated_optimized_weights_50()
+
+    monkeypatch.setattr(risk_module, "_official_formation_dates", lambda conn: [date(2026, 1, 2)])
+    monkeypatch.setattr(
+        risk_module, "reconstruct_mu_sigma_rf",
+        lambda conn, fd: (mu_arr, {"SAMPLE": sigma_arr, "LW": sigma_arr}, rf_21),
+    )
+    monkeypatch.setattr(risk_module, "_load_official_weights", lambda conn, fd, strat: w)
+    app.dependency_overrides[get_db] = _get_db_returning([])
+
+    resp = client.get("/api/risk")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["formation_date"] == "2026-01-02"
+    assert body["strategy"]["key"] == "LW_MAXSHARPE"  # documented default
+    assert body["covariance_estimator"] == "Ledoit-Wolf"  # implied by the default strategy
+    assert body["forecast_horizon_sessions"] == 21
+    assert body["covariance_window_sessions"] == 252
+    assert body["portfolio"]["max_weight_constraint"] == 0.10
+    assert len(body["assets"]) == 50
+    assert {a["sector"] for a in body["assets"]} == {"Information Technology", "Financials"}
+    assert len(body["sectors"]) == 2
+    assert body["source"] == "reconstructed_from_frozen_phase7_methodology"
+
+    # RC sum identity: sum_i RC_i == sigma_p (predicted_volatility_21).
+    sigma_p = body["portfolio"]["predicted_volatility_21"]
+    rc_sum = sum(a["component_risk_contribution"] for a in body["assets"])
+    assert abs(rc_sum - sigma_p) < 1e-6
+
+    # risk-share identity: sum_i risk_share_i == 1.
+    share_sum = sum(a["risk_share"] for a in body["assets"])
+    assert abs(share_sum - 1.0) < 1e-6
+
+    # sector aggregation identity: sum of sector RC == total RC == sigma_p.
+    sector_rc_sum = sum(s["component_risk_contribution"] for s in body["sectors"])
+    assert abs(sector_rc_sum - sigma_p) < 1e-6
+    sector_weight_sum = sum(s["weight"] for s in body["sectors"])
+    assert abs(sector_weight_sum - 1.0) < 1e-6
+
+
+def test_risk_no_raw_covariance_matrix_in_payload(client, monkeypatch):
+    mu_arr, sigma_arr, rf_21 = _synthetic_frontier_context()
+    w = _concentrated_optimized_weights_50()
+    monkeypatch.setattr(risk_module, "_official_formation_dates", lambda conn: [date(2026, 1, 2)])
+    monkeypatch.setattr(
+        risk_module, "reconstruct_mu_sigma_rf",
+        lambda conn, fd: (mu_arr, {"SAMPLE": sigma_arr, "LW": sigma_arr}, rf_21),
+    )
+    monkeypatch.setattr(risk_module, "_load_official_weights", lambda conn, fd, strat: w)
+    app.dependency_overrides[get_db] = _get_db_returning([])
+
+    resp = client.get("/api/risk")
+    body = resp.json()
+    dumped = str(body)
+    assert "sigma" not in dumped.lower().replace("sigma_p", "")  # no raw covariance leaked into the response
+
+
+def test_risk_equal_weight_defaults_to_ledoit_wolf_and_uses_reconstructed_context(client, monkeypatch):
+    n = len(config.TICKER_UNIVERSE)
+    mu_arr = np.linspace(-0.01, 0.05, n)
+    sigma_arr = np.eye(n) * 0.0004
+    rf_21 = 0.001
+    w = _equal_weights_50()
+
+    monkeypatch.setattr(risk_module, "_official_formation_dates", lambda conn: [date(2026, 1, 2)])
+    monkeypatch.setattr(
+        risk_module, "reconstruct_mu_sigma_rf",
+        lambda conn, fd: (mu_arr, {"SAMPLE": sigma_arr, "LW": sigma_arr}, rf_21),
+    )
+    monkeypatch.setattr(risk_module, "_load_official_weights", lambda conn, fd, strat: w)
+    app.dependency_overrides[get_db] = _get_db_returning([])
+
+    resp = client.get("/api/risk", params={"strategy": "EQUAL_WEIGHT"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["covariance_estimator"] == "Ledoit-Wolf"  # default when unspecified
+    assert body["portfolio"]["max_weight_constraint"] is None  # never routed through MAX_WEIGHT
+    assert all(abs(a["weight"] - 1.0 / n) < 1e-9 for a in body["assets"])  # exact conceptual 1/50, never reoptimized
+
+
+def test_risk_equal_weight_explicit_sample_covariance_is_analysis_only(client, monkeypatch):
+    n = len(config.TICKER_UNIVERSE)
+    mu_arr = np.linspace(-0.01, 0.05, n)
+    sample_sigma = np.eye(n) * 0.0004
+    lw_sigma = np.eye(n) * 0.0009  # deliberately different, to prove the selector actually switches
+    rf_21 = 0.001
+    w = _equal_weights_50()
+
+    monkeypatch.setattr(risk_module, "_official_formation_dates", lambda conn: [date(2026, 1, 2)])
+    monkeypatch.setattr(
+        risk_module, "reconstruct_mu_sigma_rf",
+        lambda conn, fd: (mu_arr, {"SAMPLE": sample_sigma, "LW": lw_sigma}, rf_21),
+    )
+    monkeypatch.setattr(risk_module, "_load_official_weights", lambda conn, fd, strat: w)
+    app.dependency_overrides[get_db] = _get_db_returning([])
+
+    resp = client.get("/api/risk", params={"strategy": "EQUAL_WEIGHT", "covariance": "SAMPLE"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["covariance_estimator"] == "Sample"
+    # Equal-weight portfolio variance under a diagonal Sigma=var*I is var/n;
+    # confirms the SAMPLE selection actually took effect (would be
+    # sqrt(0.0009/n) if LW had been used instead).
+    import math
+    assert abs(body["portfolio"]["predicted_volatility_21"] - math.sqrt(0.0004 / n)) < 1e-9
+
+
+def test_risk_negative_component_contribution_is_preserved_not_clamped(client, monkeypatch):
+    """§4 — a genuine hedge asset can carry a NEGATIVE component risk
+    contribution; it must never be clamped to zero, abs'd, or
+    renormalized away."""
+    n = len(config.TICKER_UNIVERSE)
+    mu_arr = np.zeros(n)
+    sigma_arr = _synthetic_hedge_sigma()
+    rf_21 = 0.001
+    w = _equal_weights_50()
+
+    monkeypatch.setattr(risk_module, "_official_formation_dates", lambda conn: [date(2026, 1, 2)])
+    monkeypatch.setattr(
+        risk_module, "reconstruct_mu_sigma_rf",
+        lambda conn, fd: (mu_arr, {"SAMPLE": sigma_arr, "LW": sigma_arr}, rf_21),
+    )
+    monkeypatch.setattr(risk_module, "_load_official_weights", lambda conn, fd, strat: w)
+    app.dependency_overrides[get_db] = _get_db_returning([])
+
+    resp = client.get("/api/risk", params={"strategy": "EQUAL_WEIGHT"})
+    assert resp.status_code == 200
+    body = resp.json()
+    hedge_asset = next(a for a in body["assets"] if a["ticker"] == config.TICKER_UNIVERSE[0])
+    assert hedge_asset["component_risk_contribution"] < 0
+    assert hedge_asset["risk_share"] < 0
+    # Identity must still hold even with a negative term present.
+    sigma_p = body["portfolio"]["predicted_volatility_21"]
+    rc_sum = sum(a["component_risk_contribution"] for a in body["assets"])
+    assert abs(rc_sum - sigma_p) < 1e-6
+
+
+def test_risk_response_schema_has_no_ex_post_or_spxt_fields():
+    from app.schemas import AssetRiskRow, PortfolioRiskSummary, RiskResponse
+
+    forbidden = {"realized_return_21", "turnover", "spxt", "actual_return"}
+    for schema in (AssetRiskRow, PortfolioRiskSummary, RiskResponse):
+        assert not (set(schema.model_fields.keys()) & forbidden), f"{schema.__name__} leaks an ex-post/SPXT field"
+
+
+def test_risk_route_never_imports_stage_b_or_spxt_modules():
+    """Same AST-based static causality guarantee as the Frontier route:
+    Risk Analytics is entirely ex-ante, so Stage-B (realized-return) and
+    SPXT (evaluation-only benchmark) symbols must never be imported."""
+    path = pathlib.Path(__file__).resolve().parent.parent / "app" / "routes" / "risk.py"
+    tree = ast.parse(path.read_text())
+    imported_names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            imported_names.add(module)
+            imported_names.update(f"{module}.{alias.name}" for alias in node.names)
+            imported_names.update(alias.name for alias in node.names)
+    forbidden = {
+        "optimizer.benchmark_spxt", "benchmark_spxt", "spxt_total_return",
+        "optimizer.walkforward", "realized_stock_returns", "realized_portfolio_return",
+    }
+    hit = imported_names & forbidden
+    assert not hit, f"risk.py imports forbidden Stage-B/SPXT symbol(s): {hit}"
+
+
+def test_risk_module_namespace_has_no_stage_b_or_spxt_symbols():
+    forbidden = {"realized_stock_returns", "realized_portfolio_return", "spxt_total_return", "spxt_raw"}
+    names = set(vars(risk_module).keys())
+    assert not (names & forbidden), f"risk module namespace unexpectedly binds: {names & forbidden}"
 
 
 # ---------------------------------------------------------------------------

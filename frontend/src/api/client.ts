@@ -14,6 +14,7 @@ import type {
   PredictionCrossSectionResponse,
   PriceHistoryResponse,
   ReadinessResponse,
+  RiskResponse,
   StrategyInfo,
   UniverseTicker,
 } from "./types";
@@ -142,4 +143,15 @@ export function getPortfolio(formationDate?: string, strategy?: string): Promise
  * of latency. */
 export function getFrontier(formationDate?: string, covariance?: string): Promise<FrontierResponse> {
   return request<FrontierResponse>("/api/frontier", { formation_date: formationDate, covariance });
+}
+
+/** Formation-time (ex-ante) component risk contribution for an official
+ * Phase 7 portfolio. Omit `formationDate` for the latest available; omit
+ * `strategy` for the Ledoit-Wolf Max-Sharpe default — never "best."
+ * `covariance` is meaningful only for `strategy="EQUAL_WEIGHT"` (which
+ * has no covariance identity of its own); for the four optimized
+ * strategies the estimator is determined by the strategy itself and a
+ * disagreeing `covariance` value is rejected by the backend. */
+export function getRisk(formationDate?: string, strategy?: string, covariance?: string): Promise<RiskResponse> {
+  return request<RiskResponse>("/api/risk", { formation_date: formationDate, strategy, covariance });
 }

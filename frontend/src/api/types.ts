@@ -221,3 +221,57 @@ export interface FrontierResponse {
   markers: FrontierMarkers;
   source: string;
 }
+
+/** One ticker's formation-time risk decomposition within an official
+ * Phase 7 portfolio. `component_risk_contribution` (RC_i) is the
+ * AUTHORITATIVE decomposition — same units as `portfolio.predicted_volatility_21`,
+ * additive across all 50 assets. It is NEVER clamped/abs'd — a genuine
+ * diversifying position can carry a negative value; render it as-is.
+ * `risk_share` is a convenience normalization for display only. */
+export interface AssetRiskRow {
+  ticker: string;
+  sector: string;
+  weight: number;
+  marginal_risk_contribution: number;
+  component_risk_contribution: number;
+  risk_share: number;
+}
+
+/** Sector aggregate: sum of `AssetRiskRow.component_risk_contribution`
+ * across every asset in that sector — valid because contributions are
+ * additive (no separate sector covariance model). */
+export interface SectorRiskRow {
+  sector: string;
+  weight: number;
+  component_risk_contribution: number;
+  risk_share: number;
+}
+
+/** `max_weight_constraint` is `null` for EQUAL_WEIGHT (never routed
+ * through MAX_WEIGHT). `effective_holdings` = `1 / concentration_hhi`. */
+export interface PortfolioRiskSummary {
+  predicted_volatility_21: number;
+  largest_weight: number;
+  active_holdings_count: number;
+  concentration_hhi: number;
+  effective_holdings: number;
+  max_weight_constraint: number | null;
+}
+
+/** Full body of GET /api/risk — formation-time (ex-ante) risk
+ * decomposition of an official Phase 7 portfolio. `covariance_estimator`
+ * is DETERMINED by `strategy` for the four optimized strategies; it is a
+ * genuine analysis choice only for EQUAL_WEIGHT (no covariance identity
+ * of its own — see app/routes/risk.py). Never contains realized/ex-post
+ * figures. */
+export interface RiskResponse {
+  formation_date: string;
+  strategy: StrategyInfo;
+  covariance_estimator: "Sample" | "Ledoit-Wolf";
+  forecast_horizon_sessions: number;
+  covariance_window_sessions: number;
+  portfolio: PortfolioRiskSummary;
+  assets: AssetRiskRow[];
+  sectors: SectorRiskRow[];
+  source: string;
+}
