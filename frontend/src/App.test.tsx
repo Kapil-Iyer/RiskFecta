@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
@@ -106,8 +106,9 @@ describe("App routing shell", () => {
     // Overview page content.
     expect(screen.getByRole("heading", { name: "Research pipeline" })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("link", { name: "Methodology" }));
-    expect(await screen.findByRole("heading", { name: /Methodology & roadmap/ })).toBeInTheDocument();
+    const nav = screen.getByRole("navigation", { name: "Research surfaces" });
+    await user.click(within(nav).getByRole("link", { name: "Methodology" }));
+    expect(await screen.findByRole("heading", { name: "Methodology", level: 1 })).toBeInTheDocument();
 
     // Historical Evidence is now live too — every dashboard surface in
     // NAV_ITEMS has a real page (Forecast Rankings, Model Comparison,
@@ -115,8 +116,10 @@ describe("App routing shell", () => {
     // Historical Evidence each have their own dedicated test suites in
     // pages/*.test.tsx). Leave its own fetch pending here — this test only
     // cares about shell-level navigation, not Historical Evidence's data.
+    // The Methodology page itself now links to Historical Evidence too, so
+    // the nav-bar link is disambiguated by scoping to the nav landmark.
     vi.mocked(client.getBacktest).mockReturnValue(new Promise(() => {}));
-    await user.click(screen.getByRole("link", { name: "Historical Evidence" }));
+    await user.click(within(nav).getByRole("link", { name: "Historical Evidence" }));
     expect(await screen.findByRole("heading", { name: "Historical Evidence" })).toBeInTheDocument();
     expect(screen.queryByText(/not yet implemented/)).not.toBeInTheDocument();
   });

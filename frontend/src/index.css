@@ -686,61 +686,6 @@ button {
 }
 
 /* ---------------------------------------------------------------------- */
-/* Methodology                                                             */
-/* ---------------------------------------------------------------------- */
-.methodology p {
-  line-height: 1.6;
-  color: var(--color-text-muted);
-}
-
-.methodology h3 {
-  color: var(--color-text);
-  font-size: 0.92rem;
-}
-
-.roadmap-list {
-  margin: 0.5rem 0 1rem;
-  padding-left: 1.25rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  color: var(--color-text-muted);
-}
-
-.roadmap-list li {
-  line-height: 1.55;
-}
-
-.roadmap-list strong {
-  color: var(--color-text);
-}
-
-.tag {
-  font-size: 0.66rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  padding: 0.1rem 0.4rem;
-  border-radius: var(--radius-sm);
-  margin-left: 0.35rem;
-  border: 1px solid var(--color-border-strong);
-  color: var(--color-text-muted);
-}
-
-.methodology__note {
-  font-size: 0.85rem;
-  border-top: 1px solid var(--color-border);
-  padding-top: 0.85rem;
-  margin-bottom: 0;
-}
-
-.methodology__note code {
-  font-family: var(--font-mono);
-  font-size: 0.85em;
-  color: var(--color-text-muted);
-}
-
-/* ---------------------------------------------------------------------- */
 /* Shared states                                                           */
 /* ---------------------------------------------------------------------- */
 .state {
