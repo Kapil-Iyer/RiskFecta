@@ -275,3 +275,75 @@ export interface RiskResponse {
   sectors: SectorRiskRow[];
   source: string;
 }
+
+/** One of the 46 non-overlapping, sequential 21-session evaluation
+ * periods. `growth_of_one` is compounded wealth of $1 AT `target_date` —
+ * `product(1+r_1..r_i)`, never a fabricated intra-period value. The
+ * frontend renders the implicit anchor point (`formation_date` of the
+ * FIRST period, growth = 1.0) itself before plotting these — see
+ * HistoricalEvidencePage's `toGrowthSeries`. `turnover`/
+ * `max_weight_observed` are `null` for the SPXT benchmark (no portfolio
+ * weights exist for an index); `turnover` is additionally `null` for
+ * every strategy's own first formation period (genuinely undefined,
+ * never zero). */
+export interface BacktestPeriod {
+  formation_date: string;
+  target_date: string;
+  realized_return_21: number;
+  growth_of_one: number;
+  turnover: number | null;
+  max_weight_observed: number | null;
+}
+
+/** Direct output of the frozen Phase 7 aggregation — never annualized,
+ * never a risk-adjusted (Sharpe-style) aggregate. `mean_turnover`
+ * through `max_observed_weight` are `null` for the SPXT benchmark
+ * series (not a weighted portfolio). */
+export interface BacktestSummary {
+  mean_return_21: number;
+  std_return_21: number;
+  median_return_21: number;
+  min_return_21: number;
+  max_return_21: number;
+  positive_period_rate: number;
+  cumulative_return: number;
+  mean_turnover: number | null;
+  median_turnover: number | null;
+  max_turnover: number | null;
+  avg_max_weight: number | null;
+  max_observed_weight: number | null;
+}
+
+/** One of the six displayed series — the five official Phase 7 strategies
+ * (`kind: "portfolio"`) plus the official SPXT benchmark
+ * (`kind: "benchmark"`). Never labeled "best"/"winner"/"recommended". */
+export interface BacktestSeries {
+  key: string;
+  label: string;
+  kind: "portfolio" | "benchmark";
+  is_optimized: boolean | null;
+  covariance_estimator: string | null;
+  max_weight_constraint: number | null;
+  periods: BacktestPeriod[];
+  summary: BacktestSummary;
+}
+
+export interface BacktestExperiment {
+  period_count: number;
+  first_formation_date: string;
+  last_formation_date: string;
+  horizon_sessions: number;
+  covariance_window_sessions: number;
+  benchmark: string;
+  data_through: string | null;
+}
+
+/** Full body of GET /api/backtest — the frozen, official Phase 7
+ * historical walk-forward evidence across 46 non-overlapping periods.
+ * Never a new backtest, never a ranking, never a sealed-holdout (March
+ * 2026) result. */
+export interface BacktestResponse {
+  experiment: BacktestExperiment;
+  series: BacktestSeries[];
+  source: string;
+}

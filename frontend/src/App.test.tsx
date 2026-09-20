@@ -21,6 +21,7 @@ vi.mock("./api/client", async () => {
     getPortfolio: vi.fn(),
     getFrontier: vi.fn(),
     getRisk: vi.fn(),
+    getBacktest: vi.fn(),
   };
 });
 
@@ -108,14 +109,15 @@ describe("App routing shell", () => {
     await user.click(screen.getByRole("link", { name: "Methodology" }));
     expect(await screen.findByRole("heading", { name: /Methodology & roadmap/ })).toBeInTheDocument();
 
-    // Historical Evidence is still a not-yet-built Coming Soon surface
-    // (Forecast Rankings, Model Comparison, Portfolio Construction,
-    // Efficient Frontier, and Risk Analytics each have their own dedicated
-    // test suites in pages/*.test.tsx).
+    // Historical Evidence is now live too — every dashboard surface in
+    // NAV_ITEMS has a real page (Forecast Rankings, Model Comparison,
+    // Portfolio Construction, Efficient Frontier, Risk Analytics, and
+    // Historical Evidence each have their own dedicated test suites in
+    // pages/*.test.tsx). Leave its own fetch pending here — this test only
+    // cares about shell-level navigation, not Historical Evidence's data.
+    vi.mocked(client.getBacktest).mockReturnValue(new Promise(() => {}));
     await user.click(screen.getByRole("link", { name: "Historical Evidence" }));
     expect(await screen.findByRole("heading", { name: "Historical Evidence" })).toBeInTheDocument();
-    // A not-yet-built surface must never show fabricated numbers/charts.
-    expect(document.querySelector(".chart")).not.toBeInTheDocument();
-    expect(screen.getByText(/not yet implemented/)).toBeInTheDocument();
+    expect(screen.queryByText(/not yet implemented/)).not.toBeInTheDocument();
   });
 });

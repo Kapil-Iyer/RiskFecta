@@ -6,6 +6,7 @@
  * the local Phase 2A dev server so `npm run dev` works out of the box.
  */
 import type {
+  BacktestResponse,
   FrontierResponse,
   HealthResponse,
   MarketSummaryResponse,
@@ -154,4 +155,12 @@ export function getFrontier(formationDate?: string, covariance?: string): Promis
  * disagreeing `covariance` value is rejected by the backend. */
 export function getRisk(formationDate?: string, strategy?: string, covariance?: string): Promise<RiskResponse> {
   return request<RiskResponse>("/api/risk", { formation_date: formationDate, strategy, covariance });
+}
+
+/** The frozen, official Phase 7 historical walk-forward experiment
+ * across all 46 non-overlapping 21-session evaluation periods — all six
+ * displayed series (five portfolio strategies + SPXT) in one response.
+ * Never a new backtest, never a ranking. */
+export function getBacktest(): Promise<BacktestResponse> {
+  return request<BacktestResponse>("/api/backtest");
 }

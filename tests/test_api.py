@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 import config
 from app.db import get_db
 from app.main import app
+from app.routes import backtest as backtest_module
 from app.routes import frontier as frontier_module
 from app.routes import risk as risk_module
 
@@ -948,6 +949,260 @@ def test_risk_module_namespace_has_no_stage_b_or_spxt_symbols():
     forbidden = {"realized_stock_returns", "realized_portfolio_return", "spxt_total_return", "spxt_raw"}
     names = set(vars(risk_module).keys())
     assert not (names & forbidden), f"risk module namespace unexpectedly binds: {names & forbidden}"
+
+
+# ---------------------------------------------------------------------------
+# Historical Evidence (frozen, official Phase 7 walk-forward experiment —
+# Phase 8D-2). UNLIKE Frontier/Risk, this route legitimately imports
+# `optimizer.walkforward` (aggregation/compounding helpers) and
+# `optimizer.benchmark_spxt` (the official benchmark) — it is specifically
+# about presenting realized/evaluation results. What it must NEVER do is
+# reconstruct realized figures with a second formula, use the deprecated
+# non-official SPX diagnostic, or touch sealed/extension data. Numeric
+# reconciliation against the frozen Phase 7 report lives in
+# tests/test_api_db_integration.py; these are route-level unit tests using
+# a small synthetic (but real-shaped, 46-period, sequentially-chained)
+# calendar so the real `aggregate_statistics`/`cumulative_compounded_return`
+# math still runs, without touching the live database or
+# data/raw/spxt_benchmark.csv.
+# ---------------------------------------------------------------------------
+from optimizer.walkforward import StrategyPeriodResult as _StrategyPeriodResult  # noqa: E402
+
+
+def _synthetic_backtest_calendar(n=46):
+    dates = pd.date_range("2022-01-03", periods=n + 1, freq="21D")
+    return pd.DataFrame({"forecast_date": dates[:-1], "target_date": dates[1:]})
+
+
+def _synthetic_period_results(calendar_df, returns, turnovers):
+    return [
+        _StrategyPeriodResult(formation_date=fd, realized_return=r, turnover=t, max_weight_observed=0.1)
+        for fd, r, t in zip(calendar_df["forecast_date"], returns, turnovers)
+    ]
+
+
+def _get_db_returning_data_through(d=date(2026, 2, 27)):
+    """The backtest route's final query (`SELECT MAX(date) FROM
+    prices_raw`) needs `fetchone()` to return a real one-tuple row, unlike
+    the plain `_get_db_returning([])` used by routes that never reach a
+    trailing scalar query."""
+    return _get_db_returning([(d,)])
+
+
+def _patch_backtest_boundaries(monkeypatch, calendar_df, returns_by_strategy, spxt_series):
+    n = len(calendar_df)
+    monkeypatch.setattr(backtest_module, "_official_formation_dates", lambda conn: [date(2022, 1, 1)] * n)
+    monkeypatch.setattr(backtest_module, "_load_formation_target_calendar", lambda conn, dates: calendar_df)
+
+    def _fake_period_results(conn, strategy, cal):
+        returns, turnovers = returns_by_strategy[strategy]
+        return _synthetic_period_results(cal, returns, turnovers)
+
+    monkeypatch.setattr(backtest_module, "_load_strategy_period_results", _fake_period_results)
+    monkeypatch.setattr(backtest_module, "_spxt_series", lambda cal: spxt_series)
+
+
+def _default_returns_by_strategy(n=46):
+    from optimizer.persistence import VALID_STRATEGIES
+
+    out = {}
+    for i, strat in enumerate(VALID_STRATEGIES):
+        returns = [0.01 * ((j % 5) - 2) for j in range(n)]  # deterministic, in [-0.02, 0.02]
+        turnovers = [float("nan")] + [0.1] * (n - 1)  # first undefined, matches real persisted behavior
+        out[strat] = (returns, turnovers)
+    return out
+
+
+def _fake_spxt_series(calendar_df):
+    from app.schemas import BacktestPeriod, BacktestSeries, BacktestSummary
+
+    returns = [0.005] * len(calendar_df)
+    growth = []
+    level = 1.0
+    for r in returns:
+        level *= 1 + r
+        growth.append(level)
+    periods = [
+        BacktestPeriod(
+            formation_date=row["forecast_date"].date(),
+            target_date=row["target_date"].date(),
+            realized_return_21=returns[i],
+            growth_of_one=growth[i],
+            turnover=None,
+            max_weight_observed=None,
+        )
+        for i, (_, row) in enumerate(calendar_df.iterrows())
+    ]
+    return BacktestSeries(
+        key="SPXT", label="SPXT (S&P 500 Total Return)", kind="benchmark",
+        is_optimized=None, covariance_estimator=None, max_weight_constraint=None,
+        periods=periods,
+        summary=BacktestSummary(
+            mean_return_21=0.005, std_return_21=0.0, median_return_21=0.005, min_return_21=0.005,
+            max_return_21=0.005, positive_period_rate=1.0, cumulative_return=growth[-1] - 1.0,
+        ),
+    )
+
+
+def test_backtest_returns_six_series_with_46_periods_each(client, monkeypatch):
+    calendar_df = _synthetic_backtest_calendar()
+    _patch_backtest_boundaries(monkeypatch, calendar_df, _default_returns_by_strategy(), _fake_spxt_series(calendar_df))
+    app.dependency_overrides[get_db] = _get_db_returning_data_through()
+
+    resp = client.get("/api/backtest")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["experiment"]["period_count"] == 46
+    assert len(body["series"]) == 6
+    keys = {s["key"] for s in body["series"]}
+    assert keys == {"SAMPLE_MINVOL", "SAMPLE_MAXSHARPE", "LW_MINVOL", "LW_MAXSHARPE", "EQUAL_WEIGHT", "SPXT"}
+    for s in body["series"]:
+        assert len(s["periods"]) == 46
+
+
+def test_backtest_kind_and_provenance_flags_are_truthful(client, monkeypatch):
+    calendar_df = _synthetic_backtest_calendar()
+    _patch_backtest_boundaries(monkeypatch, calendar_df, _default_returns_by_strategy(), _fake_spxt_series(calendar_df))
+    app.dependency_overrides[get_db] = _get_db_returning_data_through()
+
+    resp = client.get("/api/backtest")
+    body = resp.json()
+    by_key = {s["key"]: s for s in body["series"]}
+    for key in ("SAMPLE_MINVOL", "SAMPLE_MAXSHARPE", "LW_MINVOL", "LW_MAXSHARPE"):
+        assert by_key[key]["kind"] == "portfolio"
+        assert by_key[key]["is_optimized"] is True
+        assert by_key[key]["max_weight_constraint"] == 0.10
+    assert by_key["EQUAL_WEIGHT"]["kind"] == "portfolio"
+    assert by_key["EQUAL_WEIGHT"]["is_optimized"] is False
+    assert by_key["EQUAL_WEIGHT"]["max_weight_constraint"] is None
+    assert by_key["SPXT"]["kind"] == "benchmark"
+    assert by_key["SPXT"]["is_optimized"] is None
+    assert by_key["SPXT"]["covariance_estimator"] is None
+    assert by_key["SPXT"]["max_weight_constraint"] is None
+
+
+def test_backtest_first_period_turnover_is_null_never_zero_for_portfolios(client, monkeypatch):
+    calendar_df = _synthetic_backtest_calendar()
+    _patch_backtest_boundaries(monkeypatch, calendar_df, _default_returns_by_strategy(), _fake_spxt_series(calendar_df))
+    app.dependency_overrides[get_db] = _get_db_returning_data_through()
+
+    resp = client.get("/api/backtest")
+    body = resp.json()
+    for s in body["series"]:
+        if s["kind"] != "portfolio":
+            continue
+        assert s["periods"][0]["turnover"] is None
+        assert s["periods"][1]["turnover"] is not None  # a real, later persisted value
+
+
+def test_backtest_spxt_series_has_no_turnover_or_max_weight(client, monkeypatch):
+    calendar_df = _synthetic_backtest_calendar()
+    _patch_backtest_boundaries(monkeypatch, calendar_df, _default_returns_by_strategy(), _fake_spxt_series(calendar_df))
+    app.dependency_overrides[get_db] = _get_db_returning_data_through()
+
+    resp = client.get("/api/backtest")
+    spxt = next(s for s in resp.json()["series"] if s["key"] == "SPXT")
+    assert spxt["summary"]["mean_turnover"] is None
+    assert spxt["summary"]["avg_max_weight"] is None
+    assert all(p["turnover"] is None and p["max_weight_observed"] is None for p in spxt["periods"])
+
+
+def test_backtest_rejects_a_period_count_other_than_46(client, monkeypatch):
+    """§15 period-count verification: the route must refuse to serve a
+    result claiming to be the official Phase 7 experiment if the eligible
+    formation calendar isn't exactly 46 dates — never silently proceed
+    with a different count."""
+    calendar_df = _synthetic_backtest_calendar(n=3)
+    from optimizer.persistence import VALID_STRATEGIES
+
+    returns_by_strategy = {strat: ([0.01, -0.02, 0.03], [float("nan"), 0.1, 0.1]) for strat in VALID_STRATEGIES}
+    _patch_backtest_boundaries(monkeypatch, calendar_df, returns_by_strategy, _fake_spxt_series(calendar_df))
+    app.dependency_overrides[get_db] = _get_db_returning([])
+    monkeypatch.setattr(backtest_module, "_official_formation_dates", lambda conn: [date(2022, 1, 1)] * 3)
+
+    resp = client.get("/api/backtest")
+    assert resp.status_code == 500
+    assert "46" in resp.json()["detail"]
+
+
+def test_backtest_growth_of_one_matches_hand_computed_compounding(client, monkeypatch):
+    """Same compounding check as above, but at the full 46-period shape
+    the route requires, so it actually returns 200 — verifies growth_of_one
+    at every step equals sequential compounding, and the final growth
+    matches the reported cumulative_return (never sum(returns))."""
+    calendar_df = _synthetic_backtest_calendar(n=46)
+    returns = [0.01, -0.02, 0.03] + [0.0] * 43
+    turnovers = [float("nan")] + [0.1] * 45
+    from optimizer.persistence import VALID_STRATEGIES
+
+    returns_by_strategy = {strat: (returns, turnovers) for strat in VALID_STRATEGIES}
+    _patch_backtest_boundaries(monkeypatch, calendar_df, returns_by_strategy, _fake_spxt_series(calendar_df))
+    app.dependency_overrides[get_db] = _get_db_returning_data_through()
+
+    resp = client.get("/api/backtest")
+    assert resp.status_code == 200
+    series = next(s for s in resp.json()["series"] if s["key"] == "LW_MAXSHARPE")
+    periods = series["periods"]
+
+    expected_growth = []
+    level = 1.0
+    for r in returns:
+        level *= 1 + r
+        expected_growth.append(level)
+
+    for i in (0, 1, 2):
+        assert abs(periods[i]["growth_of_one"] - expected_growth[i]) < 1e-9
+    # Flat thereafter (0% returns) — growth must stay constant, not drift.
+    assert abs(periods[-1]["growth_of_one"] - expected_growth[-1]) < 1e-9
+
+    # Cumulative return must equal the compounded product minus 1 —
+    # never the naive sum of the 46 period returns.
+    assert abs(series["summary"]["cumulative_return"] - (expected_growth[-1] - 1.0)) < 1e-9
+    assert abs(series["summary"]["cumulative_return"] - sum(returns)) > 1e-6
+
+
+def test_backtest_response_schema_is_lean_no_raw_covariance_or_holdings():
+    from app.schemas import BacktestPeriod, BacktestSeries
+
+    period_fields = set(BacktestPeriod.model_fields.keys())
+    assert "weights" not in period_fields and "holdings" not in period_fields
+    series_fields = set(BacktestSeries.model_fields.keys())
+    assert "weights" not in series_fields and "assets" not in series_fields
+
+
+def test_backtest_route_never_reconstructs_realized_returns_or_uses_deprecated_spx_diagnostic():
+    """Backend causality guard specific to this route: it must read
+    already-persisted `realized_return_21` (never recompute it via
+    Stage-B's raw stock/portfolio-return reconstruction) and must use only
+    the official SPXT total-return helper — never the deprecated,
+    non-official SPX price-return diagnostic."""
+    path = pathlib.Path(__file__).resolve().parent.parent / "app" / "routes" / "backtest.py"
+    tree = ast.parse(path.read_text())
+    imported_names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            imported_names.add(module)
+            imported_names.update(f"{module}.{alias.name}" for alias in node.names)
+            imported_names.update(alias.name for alias in node.names)
+    forbidden = {"realized_stock_returns", "realized_portfolio_return", "spx_price_return_diagnostic"}
+    hit = imported_names & forbidden
+    assert not hit, f"backtest.py imports forbidden symbol(s): {hit}"
+
+
+def test_backtest_route_never_references_sealed_or_extension_data():
+    """The module docstring legitimately DOCUMENTS this exclusion (naming
+    the forbidden files to explain why they're absent) — strip it before
+    scanning so that documentation can't itself trip the guard; only the
+    executable code body is checked."""
+    path = pathlib.Path(__file__).resolve().parent.parent / "app" / "routes" / "backtest.py"
+    source = path.read_text()
+    module_docstring = ast.get_docstring(ast.parse(source)) or ""
+    code_only = source.replace(module_docstring, "").lower()
+    for forbidden in ("prices_sealed", "macro_sealed", "prices_extension", "macro_extension"):
+        assert forbidden not in code_only, f"backtest.py references forbidden sealed/extension artifact: {forbidden}"
 
 
 # ---------------------------------------------------------------------------

@@ -680,6 +680,196 @@ def test_risk_equal_weight_covariance_selector_changes_result_without_reoptimizi
     assert body_lw["portfolio"]["predicted_volatility_21"] != body_sample["portfolio"]["predicted_volatility_21"]
 
 
+# ---------------------------------------------------------------------------
+# Historical Evidence (Phase 8D-2) — the frozen, official Phase 7
+# walk-forward experiment. `EXPECTED_BACKTEST_SUMMARY`/`EXPECTED_SPXT_SUMMARY`
+# are the reconciliation targets from the frozen Phase 7 report (task
+# brief §6) — never hard-coded as the response itself, only as an
+# independent check on it. Tolerances are set at 1e-3 (0.1 percentage
+# point / 0.001 turnover), comfortably above the report's own last
+# displayed digit of rounding.
+# ---------------------------------------------------------------------------
+_TOL = 1e-3
+
+EXPECTED_BACKTEST_SUMMARY = {
+    "SAMPLE_MINVOL": dict(
+        mean=0.0089, std=0.0389, median=0.0138, min=-0.0935, max=0.0979, hit=0.609,
+        mean_to=0.0837, median_to=0.0759, max_to=0.1736, avg_maxw=0.1000, max_obs_w=0.1000, cum=0.454,
+    ),
+    "SAMPLE_MAXSHARPE": dict(
+        mean=0.0200, std=0.0588, median=0.0243, min=-0.1187, max=0.1490, hit=0.674,
+        mean_to=0.6362, median_to=0.6495, max_to=0.9000, avg_maxw=0.1000, max_obs_w=0.1000, cum=1.306,
+    ),
+    "LW_MINVOL": dict(
+        mean=0.0090, std=0.0388, median=0.0142, min=-0.0937, max=0.0979, hit=0.609,
+        mean_to=0.0806, median_to=0.0751, max_to=0.1748, avg_maxw=0.1000, max_obs_w=0.1000, cum=0.459,
+    ),
+    "LW_MAXSHARPE": dict(
+        mean=0.0200, std=0.0588, median=0.0238, min=-0.1187, max=0.1490, hit=0.674,
+        mean_to=0.6365, median_to=0.6668, max_to=0.9000, avg_maxw=0.1000, max_obs_w=0.1000, cum=1.303,
+    ),
+    "EQUAL_WEIGHT": dict(
+        mean=0.0157, std=0.0545, median=0.0216, min=-0.1187, max=0.1454, hit=0.609,
+        mean_to=0.0, median_to=0.0, max_to=0.0, avg_maxw=0.0200, max_obs_w=0.0200, cum=0.916,
+    ),
+}
+EXPECTED_SPXT_SUMMARY = dict(mean=0.0111, std=0.0418, median=0.0149, min=-0.0998, max=0.1081, hit=0.674, cum=0.600)
+
+
+@_skip_no_db
+def test_backtest_experiment_shape_matches_frozen_phase7_calendar(client):
+    resp = client.get("/api/backtest")
+    assert resp.status_code == 200
+    body = resp.json()
+    exp = body["experiment"]
+    assert exp["period_count"] == EXPECTED_PORTFOLIO_DATE_COUNT
+    assert exp["first_formation_date"] == EXPECTED_FIRST_PORTFOLIO_DATE
+    assert exp["last_formation_date"] == EXPECTED_LAST_PORTFOLIO_DATE
+    assert exp["horizon_sessions"] == 21
+    assert exp["covariance_window_sessions"] == 252
+    assert exp["benchmark"] == "SPXT"
+
+
+@_skip_no_db
+def test_backtest_returns_exactly_six_series_all_with_46_real_periods(client):
+    resp = client.get("/api/backtest")
+    body = resp.json()
+    keys = {s["key"] for s in body["series"]}
+    assert keys == set(EXPECTED_STRATEGIES) | {"SPXT"}
+    for s in body["series"]:
+        assert len(s["periods"]) == EXPECTED_PORTFOLIO_DATE_COUNT
+        formation_dates = [p["formation_date"] for p in s["periods"]]
+        assert formation_dates == sorted(formation_dates)
+        assert len(set(formation_dates)) == EXPECTED_PORTFOLIO_DATE_COUNT  # no duplicates/fabricated dates
+        assert formation_dates[0] == EXPECTED_FIRST_PORTFOLIO_DATE
+        assert formation_dates[-1] == EXPECTED_LAST_PORTFOLIO_DATE
+
+
+@_skip_no_db
+@pytest.mark.parametrize("strategy", EXPECTED_STRATEGIES)
+def test_backtest_portfolio_summary_reconciles_with_frozen_phase7_report(client, strategy):
+    """§15 mandatory reconciliation — every summary statistic independently
+    recomputed by this endpoint against the frozen Phase 7 report."""
+    resp = client.get("/api/backtest")
+    series = next(s for s in resp.json()["series"] if s["key"] == strategy)
+    summ = series["summary"]
+    expected = EXPECTED_BACKTEST_SUMMARY[strategy]
+
+    assert abs(summ["mean_return_21"] - expected["mean"]) < _TOL
+    assert abs(summ["std_return_21"] - expected["std"]) < _TOL
+    assert abs(summ["median_return_21"] - expected["median"]) < _TOL
+    assert abs(summ["min_return_21"] - expected["min"]) < _TOL
+    assert abs(summ["max_return_21"] - expected["max"]) < _TOL
+    assert abs(summ["positive_period_rate"] - expected["hit"]) < _TOL
+    assert abs(summ["cumulative_return"] - expected["cum"]) < 2e-3
+
+    assert abs(summ["mean_turnover"] - expected["mean_to"]) < _TOL
+    assert abs(summ["median_turnover"] - expected["median_to"]) < _TOL
+    assert abs(summ["max_turnover"] - expected["max_to"]) < _TOL
+    assert abs(summ["avg_max_weight"] - expected["avg_maxw"]) < _TOL
+    assert abs(summ["max_observed_weight"] - expected["max_obs_w"]) < _TOL
+
+
+@_skip_no_db
+def test_backtest_spxt_summary_reconciles_with_frozen_phase7_report(client):
+    resp = client.get("/api/backtest")
+    spxt = next(s for s in resp.json()["series"] if s["key"] == "SPXT")
+    summ = spxt["summary"]
+    expected = EXPECTED_SPXT_SUMMARY
+
+    assert abs(summ["mean_return_21"] - expected["mean"]) < _TOL
+    assert abs(summ["std_return_21"] - expected["std"]) < _TOL
+    assert abs(summ["median_return_21"] - expected["median"]) < _TOL
+    assert abs(summ["min_return_21"] - expected["min"]) < _TOL
+    assert abs(summ["max_return_21"] - expected["max"]) < _TOL
+    assert abs(summ["positive_period_rate"] - expected["hit"]) < _TOL
+    assert abs(summ["cumulative_return"] - expected["cum"]) < 2e-3
+    assert summ["mean_turnover"] is None
+    assert summ["avg_max_weight"] is None
+
+
+@_skip_no_db
+@pytest.mark.parametrize("strategy", EXPECTED_STRATEGIES)
+def test_backtest_compounding_identity_never_sums_returns(client, strategy):
+    """§16 compounding tests — growth begins at 1.0 (implicit, verified via
+    the first period), each successive point equals
+    previous_growth * (1 + period_return), the final growth matches
+    `cumulative_return`, and the result is materially different from
+    (and therefore not) the naive sum of period returns."""
+    resp = client.get("/api/backtest")
+    series = next(s for s in resp.json()["series"] if s["key"] == strategy)
+    periods = series["periods"]
+    returns = [p["realized_return_21"] for p in periods]
+    growth = [p["growth_of_one"] for p in periods]
+
+    level = 1.0
+    for i, r in enumerate(returns):
+        level *= 1.0 + r
+        assert abs(growth[i] - level) < 1e-9, f"{strategy} period {i}: growth diverges from sequential compounding"
+
+    assert abs((growth[-1] - 1.0) - series["summary"]["cumulative_return"]) < 1e-9
+    assert abs(series["summary"]["cumulative_return"] - sum(returns)) > 0.01  # unambiguously not a sum
+
+
+@_skip_no_db
+def test_backtest_first_period_turnover_null_for_every_portfolio_strategy(client):
+    resp = client.get("/api/backtest")
+    for s in resp.json()["series"]:
+        if s["kind"] != "portfolio":
+            continue
+        assert s["periods"][0]["turnover"] is None, f"{s['key']}: first-period turnover must be undefined, not 0"
+        # Every later period has a real, non-null turnover.
+        assert all(p["turnover"] is not None for p in s["periods"][1:])
+
+
+@_skip_no_db
+def test_backtest_equal_weight_later_turnover_is_truthfully_zero(client):
+    resp = client.get("/api/backtest")
+    eq = next(s for s in resp.json()["series"] if s["key"] == "EQUAL_WEIGHT")
+    later_turnovers = [p["turnover"] for p in eq["periods"][1:]]
+    assert all(abs(t) < 1e-9 for t in later_turnovers)
+
+
+@_skip_no_db
+def test_backtest_spxt_has_no_fabricated_turnover_or_weight_concentration(client):
+    resp = client.get("/api/backtest")
+    spxt = next(s for s in resp.json()["series"] if s["key"] == "SPXT")
+    assert all(p["turnover"] is None and p["max_weight_observed"] is None for p in spxt["periods"])
+    assert spxt["max_weight_constraint"] is None
+    assert spxt["is_optimized"] is None
+    assert spxt["covariance_estimator"] is None
+
+
+@_skip_no_db
+def test_backtest_spxt_periods_use_the_exact_official_formation_calendar(client):
+    """§17 SPXT exact-date verification: SPXT's 46 (formation_date,
+    target_date) pairs must be exactly the official Phase 7 portfolio
+    calendar — never a nearest-date/interpolated/independently-derived
+    set of dates."""
+    resp = client.get("/api/backtest")
+    body = resp.json()
+    spxt = next(s for s in body["series"] if s["key"] == "SPXT")
+    portfolio_series = next(s for s in body["series"] if s["key"] == "LW_MAXSHARPE")
+
+    spxt_dates = [(p["formation_date"], p["target_date"]) for p in spxt["periods"]]
+    portfolio_dates = [(p["formation_date"], p["target_date"]) for p in portfolio_series["periods"]]
+    assert spxt_dates == portfolio_dates
+
+
+@_skip_no_db
+def test_backtest_endpoint_runtime_is_materially_faster_than_frontier(client):
+    """§23 — this endpoint reads already-persisted figures plus one exact
+    benchmark lookup; no SLSQP sweep, no ML inference. Loosely bounded
+    well under Frontier's observed ~15-20s."""
+    import time
+
+    t0 = time.time()
+    resp = client.get("/api/backtest")
+    elapsed = time.time() - t0
+    assert resp.status_code == 200
+    assert elapsed < 10.0, f"/api/backtest took {elapsed:.2f}s — investigate before accepting this runtime"
+
+
 @_skip_no_db
 def test_future_phase_tables_remain_unchanged_after_api_use(client):
     """Phase 2A read-only API must not mutate later-phase research tables.
@@ -716,6 +906,7 @@ def test_future_phase_tables_remain_unchanged_after_api_use(client):
     client.get("/api/frontier", params={"formation_date": "2022-03-28", "covariance": "LW"})
     client.get("/api/risk", params={"formation_date": "2022-03-28", "strategy": "LW_MAXSHARPE"})
     client.get("/api/risk", params={"formation_date": "2022-03-28", "strategy": "EQUAL_WEIGHT", "covariance": "SAMPLE"})
+    client.get("/api/backtest")
 
     conn = db.get_connection()
     try:

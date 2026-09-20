@@ -315,3 +315,85 @@ class RiskResponse(BaseModel):
     assets: List[AssetRiskRow]
     sectors: List[SectorRiskRow]
     source: str
+
+
+class BacktestPeriod(BaseModel):
+    """One of the 46 non-overlapping, sequential 21-session evaluation
+    periods (`app/routes/backtest.py`). `growth_of_one` is the compounded
+    wealth level of $1 AT `target_date`, i.e. immediately after this
+    period's return has been realized — `product(1+r_1..r_i)`, never a
+    fabricated intra-period/daily value. `turnover`/`max_weight_observed`
+    are `None` for the SPXT benchmark series (no portfolio weights exist
+    for an index); `turnover` is additionally `None` for every strategy's
+    own first formation period (genuinely undefined, never zero)."""
+
+    formation_date: date
+    target_date: date
+    realized_return_21: float
+    growth_of_one: float
+    turnover: Optional[float] = None
+    max_weight_observed: Optional[float] = None
+
+
+class BacktestSummary(BaseModel):
+    """Direct, unmodified output of the frozen Phase 7 aggregation
+    (`optimizer.walkforward.aggregate_statistics` /
+    `cumulative_compounded_return`) for portfolio strategies, and the
+    identical arithmetic for SPXT (mean/std/median/min/max/hit-rate —
+    matching `scripts/run_phase7b_official.py`'s `_aggregate_spxt_returns`,
+    which deliberately excludes turnover/max-weight because SPXT is not a
+    weighted portfolio). Never annualized, never a Sharpe-style
+    risk-adjusted aggregate (BUILD_PLAN.md's Phase 7 report explicitly
+    scopes this out)."""
+
+    mean_return_21: float
+    std_return_21: float
+    median_return_21: float
+    min_return_21: float
+    max_return_21: float
+    positive_period_rate: float
+    cumulative_return: float
+    mean_turnover: Optional[float] = None
+    median_turnover: Optional[float] = None
+    max_turnover: Optional[float] = None
+    avg_max_weight: Optional[float] = None
+    max_observed_weight: Optional[float] = None
+
+
+class BacktestSeries(BaseModel):
+    """One of the six displayed series: the five official Phase 7
+    strategies (`kind="portfolio"`) plus the official SPXT benchmark
+    (`kind="benchmark"`). Never labeled "best"/"winner"/"recommended" —
+    `label`/`is_optimized`/`covariance_estimator` for portfolio series are
+    read from the same `STRATEGY_REGISTRY` Portfolio Construction and Risk
+    Analytics use, never a second identity scheme."""
+
+    key: str
+    label: str
+    kind: str  # "portfolio" | "benchmark"
+    is_optimized: Optional[bool] = None
+    covariance_estimator: Optional[str] = None
+    max_weight_constraint: Optional[float] = None
+    periods: List[BacktestPeriod]
+    summary: BacktestSummary
+
+
+class BacktestExperiment(BaseModel):
+    period_count: int
+    first_formation_date: date
+    last_formation_date: date
+    horizon_sessions: int
+    covariance_window_sessions: int
+    benchmark: str
+    data_through: Optional[date] = None
+
+
+class BacktestResponse(BaseModel):
+    """Frozen, official Phase 7 historical walk-forward evidence — never a
+    new backtest, never a ranking, never a sealed-holdout (March 2026)
+    result. `experiment` carries the shared calendar/horizon context;
+    `series` carries all six displayed series."""
+
+    experiment: BacktestExperiment
+    series: List[BacktestSeries]
+    source: str
