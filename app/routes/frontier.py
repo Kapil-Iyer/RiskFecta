@@ -21,10 +21,15 @@ hyperparameter.
 Data-access boundary: prices come from `prices_raw` (the same table
 `prices_raw.csv` populated — historical Bloomberg data through
 2026-02-27), cut at `date <= formation_date` in SQL before a single row
-leaves the database. The risk-free input comes from
-`pipeline.normalize.normalize_macro()`, which reads only
-`data/raw/macro.csv` (never `macro_sealed.csv`/`macro_extension.csv` —
-see pipeline/validate.py's default path). No sealed/extension file is
+leaves the database. The risk-free input reads the already-persisted
+`features.yield_10y` column (Phase 3 loaded it from `data/raw/macro.csv`'s
+USGG10YR field into Postgres for every (ticker, date) row — this route
+reads that same persisted value back rather than re-opening the
+gitignored, deployment-unavailable CSV at request time; see
+`app/routes/frontier.py::_load_rf_21` and the Phase 8F production-
+remediation report for the exact reconciliation proving this is
+numerically identical to the CSV for every official formation date, never
+a second/independent risk-free source). No sealed/extension file is
 opened anywhere in this module.
 
 Causality: nothing here calls `optimizer.walkforward.realized_stock_returns`
@@ -78,7 +83,6 @@ from optimizer.portfolio import (
     portfolio_volatility,
     rf_horizon,
 )
-from pipeline.normalize import normalize_macro
 
 router = APIRouter(prefix="/api", tags=["frontier"])
 
@@ -126,19 +130,29 @@ def _load_causal_prices(conn, formation_date: date_type) -> pd.DataFrame:
     return df
 
 
-def _load_rf_21(formation_date: date_type) -> float:
-    """`data/raw/macro.csv` only, via the same frozen loader
-    `scripts/run_phase7b_official.py` uses — never a second macro loader,
-    never `macro_sealed.csv`/`macro_extension.csv`."""
-    macro = normalize_macro()
-    yield_10y_by_date = macro.set_index("date")["yield_10y"]
-    ts = pd.Timestamp(formation_date)
-    if ts not in yield_10y_by_date.index or pd.isna(yield_10y_by_date.loc[ts]):
+def _load_rf_21(conn, formation_date: date_type) -> float:
+    """USGG10YR at `formation_date`, read from the already-persisted
+    `features.yield_10y` column rather than re-opening `data/raw/macro.csv`
+    at request time.
+
+    `features.yield_10y` was itself loaded from that exact CSV column at
+    Phase 3 ingestion time (`pipeline.normalize.normalize_macro`) — this is
+    the same frozen macro source, not a second/independent one, just read
+    from Postgres (always available in every deployment) instead of a
+    gitignored local file (absent on Render — the CSV is intentionally
+    never committed; see BUILD_PLAN.md's raw-data licensing note). Every
+    ticker shares one macro-level value per date, so any of the 50 rows for
+    `formation_date` gives the same answer; `DISTINCT` both fetches it and
+    defensively verifies that invariant instead of assuming it."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT yield_10y FROM features WHERE date = %s", (formation_date,))
+        rows = cur.fetchall()
+    if len(rows) != 1 or rows[0][0] is None:
         raise HTTPException(
             status_code=500,
             detail=f"USGG10YR not available exactly at formation_date={formation_date}",
         )
-    return rf_horizon(float(yield_10y_by_date.loc[ts]))
+    return rf_horizon(float(rows[0][0]))
 
 
 def reconstruct_mu_sigma_rf(conn, formation_date: date_type) -> Tuple[np.ndarray, Dict[str, np.ndarray], float]:
@@ -162,7 +176,7 @@ def reconstruct_mu_sigma_rf(conn, formation_date: date_type) -> Tuple[np.ndarray
         raise AssertionError("reconstruct_mu_sigma_rf: mu differs between estimator branches — alignment bug")
     mu_arr = mu_arr_sample
 
-    rf_21 = _load_rf_21(formation_date)
+    rf_21 = _load_rf_21(conn, formation_date)
     return mu_arr, {"SAMPLE": sigma_sample_arr, "LW": sigma_lw_arr}, rf_21
 
 

@@ -1220,14 +1220,179 @@ def test_research_routes_never_issue_mutating_sql():
 # code. `predictions` (Phase 8B Forecast Rankings/Model Comparison) and
 # `portfolios`/`risk_metrics` (Phase 8C Portfolio Construction —
 # app/routes/portfolios.py reads both) are now authorized and deliberately
-# removed from this list. `features` remains unauthorized — no current
-# surface (Efficient Frontier, Risk Analytics, Historical Evidence) needs it
-# yet.
+# removed from this list. `features` is now ALSO authorized (Phase 8F
+# production remediation, app/routes/frontier.py::_load_rf_21): its
+# `yield_10y` column is the same USGG10YR value `data/raw/macro.csv` holds,
+# already persisted per (ticker, date) at Phase 3 ingestion, and reading it
+# from Postgres replaces a runtime filesystem read of a gitignored CSV that
+# is genuinely absent in Render's deployed environment (root cause of the
+# Efficient Frontier / Risk Analytics production 500s — see the Phase 8F
+# report). It is NOT a future/sealed/extension table; see the narrower scope
+# guard immediately below. Currently no forbidden table remains.
 # ---------------------------------------------------------------------------
 def test_unauthorized_future_phase_tables_never_referenced_in_app_code():
-    forbidden_tables = ["features"]
+    forbidden_tables: list[str] = []
     app_dir = pathlib.Path(__file__).resolve().parent.parent / "app"
     for path in app_dir.rglob("*.py"):
         text = path.read_text().lower()
         for table in forbidden_tables:
             assert table not in text, f"{path} references not-yet-authorized table '{table}'"
+
+
+def test_features_table_access_is_scoped_to_yield_10y_only():
+    """`features` access must stay narrowly scoped to the one legitimate
+    macro column this production fix needs — never a general-purpose
+    reintroduction of the table (e.g. ML feature columns, sector/mkt_cap
+    snapshot fields) into the read-only research API. Checked by finding
+    every actual SQL SELECT touching `features` (via AST, so a docstring or
+    comment merely mentioning the table can't satisfy or trip this) and
+    requiring each one to select `yield_10y` and nothing else."""
+    path = pathlib.Path(__file__).resolve().parent.parent / "app" / "routes" / "frontier.py"
+    source = path.read_text()
+    tree = ast.parse(source)
+
+    select_calls = [
+        node.args[0].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+        and "select" in node.args[0].value.lower()
+    ]
+    features_queries = [q for q in select_calls if "features" in q.lower()]
+    assert features_queries, "expected exactly one SQL string querying `features` in frontier.py"
+    assert len(features_queries) == 1, f"expected exactly one `features` query, found {len(features_queries)}"
+    query = features_queries[0].lower()
+    assert "yield_10y" in query
+    for other_col in ("rsi_14", "macd", "bb_upper", "bb_lower", "mkt_cap_log", "div_yield", "beta", "sector"):
+        assert other_col not in query, f"frontier.py's `features` query unexpectedly selects '{other_col}'"
+
+    other_route_files = [
+        p for p in (pathlib.Path(__file__).resolve().parent.parent / "app" / "routes").glob("*.py")
+        if p.name != "frontier.py"
+    ]
+    for p in other_route_files:
+        other_tree = ast.parse(p.read_text())
+        for node in ast.walk(other_tree):
+            if (
+                isinstance(node, ast.Call)
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+                and "features" in node.args[0].value.lower()
+            ):
+                raise AssertionError(f"{p} unexpectedly issues a SQL query referencing `features`")
+
+
+# ---------------------------------------------------------------------------
+# Phase 8F production remediation: `_load_rf_21` no longer opens
+# `data/raw/macro.csv` at request time (absent on Render); it reads the
+# already-persisted `features.yield_10y` column instead.
+# ---------------------------------------------------------------------------
+def test_load_rf_21_reads_features_table_not_the_filesystem():
+    calls = []
+
+    class _FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params):
+            calls.append((sql, params))
+
+        def fetchall(self):
+            return [(4.25,)]
+
+    class _FakeConn:
+        def cursor(self):
+            return _FakeCursor()
+
+    rf_21 = frontier_module._load_rf_21(_FakeConn(), date(2026, 1, 2))
+    assert calls, "_load_rf_21 must query the database"
+    sql, params = calls[0]
+    assert "features" in sql.lower()
+    assert "yield_10y" in sql.lower()
+    assert params == (date(2026, 1, 2),)
+    from optimizer.portfolio import rf_horizon
+
+    assert abs(rf_21 - rf_horizon(4.25)) < 1e-12
+
+
+def test_load_rf_21_fails_loudly_when_yield_missing_or_ambiguous():
+    class _FakeCursor:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params):
+            pass
+
+        def fetchall(self):
+            return self._rows
+
+    class _FakeConn:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def cursor(self):
+            return _FakeCursor(self._rows)
+
+    for rows in ([], [(None,)], [(4.0,), (4.5,)]):
+        with pytest.raises(Exception) as excinfo:
+            frontier_module._load_rf_21(_FakeConn(rows), date(2026, 1, 2))
+        assert excinfo.value.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# Phase 8F production remediation: an exception with no registered
+# `@app.exception_handler` (e.g. the FileNotFoundError a missing raw CSV
+# would raise) must still carry CORS headers, or a cross-origin browser
+# reports it as a network failure rather than a server error. See
+# `app.main._UnhandledErrorMiddleware`'s docstring for why this is a
+# middleware (not an `@app.exception_handler(Exception)`), and the Phase 8F
+# report for how this was discovered against the real deployed backend.
+# ---------------------------------------------------------------------------
+def test_unhandled_exception_still_carries_cors_headers_and_hides_detail(client, monkeypatch):
+    @app.get("/__test_unhandled_error")
+    def _boom():
+        raise ValueError("/opt/render/project/src/data/raw/spxt_benchmark.csv not found")
+
+    try:
+        resp = client.get("/__test_unhandled_error", headers={"Origin": "http://localhost:5173"})
+        assert resp.status_code == 500
+        assert resp.json() == {
+            "detail": "Research data could not be loaded due to a temporary server issue. Please retry in a moment."
+        }
+        assert "spxt_benchmark" not in resp.text
+        assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
+    finally:
+        app.router.routes = [r for r in app.router.routes if getattr(r, "path", None) != "/__test_unhandled_error"]
+
+
+def test_registered_exception_handlers_still_carry_cors_headers(client):
+    """The psycopg2.Error handler (a specific class, not the bare
+    `Exception`/500 Starlette special-cases) already ran through the inner
+    ExceptionMiddleware before this fix — confirms the new middleware
+    didn't regress it."""
+    app.dependency_overrides[get_db] = _get_db_returning([])
+    monkeypatch_target = frontier_module._official_formation_dates
+
+    def _raise_db_error(conn):
+        raise psycopg2.OperationalError("could not connect to server")
+
+    frontier_module._official_formation_dates = _raise_db_error
+    try:
+        resp = client.get("/api/frontier", headers={"Origin": "http://localhost:5173"})
+        assert resp.status_code == 503
+        assert resp.json() == {"detail": "Database unavailable"}
+        assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
+    finally:
+        frontier_module._official_formation_dates = monkeypatch_target

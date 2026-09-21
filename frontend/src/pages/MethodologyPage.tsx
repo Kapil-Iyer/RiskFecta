@@ -196,7 +196,7 @@ export default function MethodologyPage() {
             </div>
           </div>
           <p>
-            Why 46, not 47: the first forecasting formation (2022-02-25) has only 252 prior daily TRI levels
+            Why 46, not 47: the first forecasting formation (2022-02-25) has only 252 prior trading-session TRI levels
             available — one short of the 253 levels needed to compute the 252 one-session covariance returns
             portfolio construction requires. Rather than shifting the date or padding the missing history, that one
             formation is excluded from portfolio construction entirely; it remains a fully valid forecasting date on{" "}

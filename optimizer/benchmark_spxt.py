@@ -36,6 +36,7 @@ fails loudly.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -46,6 +47,17 @@ import config
 
 SPXT_RAW_PATH = config.DATA_RAW / "spxt_benchmark.csv"
 
+# Deployment-location fallbacks ONLY — the parse/validation logic below is
+# identical no matter which path resolves. `data/raw/` is gitignored (private
+# Bloomberg export; see BUILD_PLAN.md), so it is never present on a
+# git-based Render deploy. `SPXT_BENCHMARK_PATH` lets an operator point at
+# wherever the file was placed (e.g. a Render persistent disk);
+# `/etc/secrets/spxt_benchmark.csv` is Render's own "Secret Files" mount
+# convention for uploading a private file outside of git. Neither path is
+# ever written to, and a local checkout with `data/raw/spxt_benchmark.csv`
+# present behaves exactly as before (first candidate wins).
+_RENDER_SECRET_PATH = Path("/etc/secrets/spxt_benchmark.csv")
+
 SPXT_DATE_COL = "date"
 SPXT_LEVEL_COL = "spxt_px_last"
 
@@ -53,12 +65,23 @@ _RAW_DATE_COL = "SPXT_DATE"
 _RAW_LEVEL_COL = "SPXT_PX_LAST"
 
 
+def _resolve_spxt_path() -> Path:
+    if SPXT_RAW_PATH.exists():
+        return SPXT_RAW_PATH
+    env_override = os.environ.get("SPXT_BENCHMARK_PATH")
+    if env_override and Path(env_override).exists():
+        return Path(env_override)
+    if _RENDER_SECRET_PATH.exists():
+        return _RENDER_SECRET_PATH
+    return SPXT_RAW_PATH  # none found — preserve the original not-found error path/message
+
+
 def load_spxt_raw(path: Optional[Path] = None) -> pd.DataFrame:
     """Read-only parse of the immutable raw SPXT artifact (never writes
     to `path`). Fails loudly on: a missing expected raw column, a
     duplicate date, or any non-numeric/non-finite/non-positive
     `SPXT_PX_LAST` value — never silently drops or coerces a bad row."""
-    path = SPXT_RAW_PATH if path is None else path
+    path = _resolve_spxt_path() if path is None else path
     raw = pd.read_csv(path)
 
     missing_cols = [c for c in (_RAW_DATE_COL, _RAW_LEVEL_COL) if c not in raw.columns]

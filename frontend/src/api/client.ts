@@ -53,12 +53,16 @@ async function request<T>(path: string, params?: Record<string, string | undefin
     response = await fetch(url.toString(), { headers: { Accept: "application/json" } });
   } catch {
     // Network-level failure (backend down, DNS, CORS block, offline, etc.) —
-    // never surface the raw TypeError to the UI.
-    throw new ApiError("Unable to reach the RiskFecta API. Is the backend running?");
+    // never surface the raw TypeError to the UI. The backend is deployed on
+    // Render's free tier, which spins down when idle, so a genuine
+    // connection failure is often just a cold start rather than an outage.
+    throw new ApiError(
+      "Unable to reach the RiskFecta API. The research service may take a few seconds to wake if it has been idle — please retry in a moment.",
+    );
   }
 
   if (!response.ok) {
-    let detail = `Request failed (${response.status})`;
+    let detail = `Research data could not be loaded (error ${response.status}). Please retry in a moment.`;
     try {
       const body = (await response.json()) as { detail?: string };
       if (body?.detail) detail = body.detail;
