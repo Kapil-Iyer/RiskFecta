@@ -77,6 +77,11 @@ def _get_db_returning(rows):
 
 @pytest.fixture
 def client():
+    # /api/frontier's in-process memoization (Phase 8F-A) is a module-level
+    # dict keyed by (formation_date, covariance) — cleared before every
+    # test so an earlier test's cached response can never leak into a
+    # later test that monkeypatches its own fake reconstruction/markers.
+    frontier_module._frontier_cache.clear()
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
@@ -664,6 +669,68 @@ def test_frontier_points_exclude_the_dominated_lower_branch(client, monkeypatch)
     assert vols == sorted(vols)
     rets = [p["expected_return_21"] for p in points]
     assert rets == sorted(rets)
+
+
+# ---------------------------------------------------------------------------
+# Phase 8F-A production remediation: in-process memoization of the
+# expensive (41-point SLSQP sweep) reconstruction, keyed by
+# (formation_date, covariance). Render's constrained CPU tier measured
+# roughly 20-30x slower than local for this specific computation; caching
+# doesn't fix a cold hit but makes every repeat visit instant.
+# ---------------------------------------------------------------------------
+def test_frontier_second_request_is_served_from_cache_and_matches_first(client, monkeypatch):
+    mu_arr, sigma_arr, rf_21 = _synthetic_frontier_context()
+    calls = {"reconstruct": 0, "marker": 0}
+
+    def _spy_reconstruct(conn, fd):
+        calls["reconstruct"] += 1
+        return mu_arr, {"SAMPLE": sigma_arr, "LW": sigma_arr}, rf_21
+
+    def _spy_marker(conn, formation_date, strategy, label):
+        calls["marker"] += 1
+        return _fake_official_marker(conn, formation_date, strategy, label)
+
+    monkeypatch.setattr(frontier_module, "_official_formation_dates", lambda conn: [date(2026, 1, 2)])
+    monkeypatch.setattr(frontier_module, "reconstruct_mu_sigma_rf", _spy_reconstruct)
+    monkeypatch.setattr(frontier_module, "_official_marker", _spy_marker)
+    monkeypatch.setattr(frontier_module, "N_FRONTIER_POINTS", 5)
+    app.dependency_overrides[get_db] = _get_db_returning([])
+
+    first = client.get("/api/frontier")
+    assert first.status_code == 200
+    assert calls == {"reconstruct": 1, "marker": 2}
+
+    # If the second request recomputed anything, these fakes would raise
+    # (they're identical, so no observable difference) — the real proof is
+    # the call counters below staying unchanged, showing the route never
+    # re-entered reconstruction/marker lookup at all.
+    second = client.get("/api/frontier")
+    assert second.status_code == 200
+    assert calls == {"reconstruct": 1, "marker": 2}, "second request must be served from cache, not recomputed"
+    assert second.json() == first.json()
+
+
+def test_frontier_cache_is_keyed_separately_per_date_and_covariance(client, monkeypatch):
+    mu_arr, sigma_arr, rf_21 = _synthetic_frontier_context()
+    reconstruct_calls = []
+
+    def _spy_reconstruct(conn, fd):
+        reconstruct_calls.append(fd)
+        return mu_arr, {"SAMPLE": sigma_arr, "LW": sigma_arr}, rf_21
+
+    monkeypatch.setattr(frontier_module, "_official_formation_dates", lambda conn: [date(2026, 1, 2), date(2025, 12, 2)])
+    monkeypatch.setattr(frontier_module, "reconstruct_mu_sigma_rf", _spy_reconstruct)
+    monkeypatch.setattr(frontier_module, "_official_marker", _fake_official_marker)
+    monkeypatch.setattr(frontier_module, "N_FRONTIER_POINTS", 5)
+    app.dependency_overrides[get_db] = _get_db_returning([])
+
+    client.get("/api/frontier", params={"formation_date": "2026-01-02", "covariance": "LW"})
+    client.get("/api/frontier", params={"formation_date": "2026-01-02", "covariance": "SAMPLE"})
+    client.get("/api/frontier", params={"formation_date": "2025-12-02", "covariance": "LW"})
+    # Repeat of the very first key — must NOT trigger a fourth reconstruction.
+    client.get("/api/frontier", params={"formation_date": "2026-01-02", "covariance": "LW"})
+
+    assert len(reconstruct_calls) == 3, "distinct (date, covariance) keys must each reconstruct exactly once"
 
 
 def test_frontier_response_schema_is_lean_no_weight_matrices():

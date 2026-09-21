@@ -21,6 +21,25 @@ from __future__ import annotations
 
 import os
 
+# Phase 8F-A production-remediation finding: on Render's constrained CPU
+# tier, the 41 sequential SLSQP solves behind GET /api/frontier measured
+# roughly 20-30x slower than the same computation locally (seconds per
+# solve instead of a fraction of a second), while /api/risk's covariance
+# reconstruction — comparably numpy-heavy but with no SLSQP loop — stayed
+# fast. NumPy's BLAS backend (OpenBLAS/MKL) defaults to spawning one
+# thread per visible CPU core; on a container whose cgroup CPU quota is far
+# below that core count, those threads contend for a fraction of a core
+# each rather than running in parallel, which is a well-documented cause of
+# exactly this kind of severe slowdown for many small, sequential linear-
+# algebra-heavy solves. Pinning each BLAS backend to a single thread here —
+# before numpy is imported by anything below — changes nothing about the
+# computation itself (same solver, same tolerances, same results, verified
+# by the numerical-reconciliation tests), only how many OS threads compute
+# it. `setdefault` so a differently-tuned environment (e.g. a multi-core
+# machine where this default is genuinely suboptimal) can still override it.
+for _blas_thread_var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+    os.environ.setdefault(_blas_thread_var, "1")
+
 import psycopg2
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware

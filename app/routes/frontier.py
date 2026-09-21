@@ -97,6 +97,19 @@ N_FRONTIER_POINTS = 41
 _ESTIMATOR_LABELS = {"SAMPLE": "Sample", "LW": "Ledoit-Wolf"}
 VALID_COVARIANCE_ESTIMATORS = ("SAMPLE", "LW")
 
+# In-process, nonpersistent memoization (Phase 8F-A production remediation):
+# there are only 46 formation dates x 2 estimators = 92 possible keys, and
+# the reconstruction is a pure function of (formation_date, covariance) —
+# the same official persisted predictions/prices/weights every time, never
+# live/changing data — so caching introduces no staleness risk. This does
+# not fix a single cold request's latency (still a real 41-point SLSQP
+# sweep the first time a given key is requested) but makes every repeat
+# visit to an already-requested date/estimator combination — the
+# overwhelmingly common case, since the page defaults to the latest date —
+# return instantly. Cleared automatically on every process restart
+# (deploy), never written anywhere persistent.
+_frontier_cache: Dict[Tuple[date_type, str], FrontierResponse] = {}
+
 
 def _load_mu(conn, formation_date: date_type) -> pd.Series:
     """Persisted `ensemble_pred` as of `formation_date` only — the same
@@ -292,6 +305,11 @@ def get_frontier(
             detail=f"formation_date={formation_date} is not a Phase 7 portfolio-eligible formation",
         )
 
+    cache_key = (formation_date, covariance)
+    cached = _frontier_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     mu_arr, sigma_by_estimator, rf_21 = reconstruct_mu_sigma_rf(conn, formation_date)
     sigma_arr = sigma_by_estimator[covariance]
 
@@ -305,7 +323,7 @@ def get_frontier(
         equal_weight=_equal_weight_marker(mu_arr, sigma_arr, rf_21),
     )
 
-    return FrontierResponse(
+    response = FrontierResponse(
         formation_date=formation_date,
         covariance_estimator=_ESTIMATOR_LABELS[covariance],
         forecast_horizon_sessions=config.FORECAST_HORIZON,
@@ -316,3 +334,5 @@ def get_frontier(
         markers=markers,
         source="reconstructed_from_frozen_phase7_methodology",
     )
+    _frontier_cache[cache_key] = response
+    return response

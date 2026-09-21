@@ -57,6 +57,11 @@ EXPECTED_STRATEGIES = ("SAMPLE_MINVOL", "SAMPLE_MAXSHARPE", "LW_MINVOL", "LW_MAX
 
 @pytest.fixture
 def client():
+    # /api/frontier's in-process memoization (Phase 8F-A) is a module-level
+    # dict — cleared so every test here genuinely exercises a fresh
+    # reconstruction against the real DB rather than an earlier test's
+    # cached response for the same (formation_date, covariance) key.
+    frontier._frontier_cache.clear()
     with TestClient(app) as c:
         yield c
 
