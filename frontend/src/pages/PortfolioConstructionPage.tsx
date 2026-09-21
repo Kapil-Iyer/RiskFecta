@@ -12,6 +12,7 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import LoadingState from "../components/LoadingState";
 import ErrorState from "../components/ErrorState";
+import PageHeader from "../components/PageHeader";
 import { sectionMotion, sectionTransition } from "../pageMotion";
 
 function formatPct(value: number | null, decimals = 2): string {
@@ -97,14 +98,10 @@ export default function PortfolioConstructionPage() {
 
   return (
     <motion.div {...sectionMotion} transition={sectionTransition} className="app-page">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-xl font-semibold text-foreground">Historical Portfolio Construction</h1>
-        <p className="max-w-3xl text-sm text-muted-foreground">
-          Given the frozen ML expected-return signal and a historical covariance estimate, what portfolio did
-          RiskFecta construct at this historical formation date? This is a historical research construction — not a
-          live recommendation, current allocation, or forward-looking promise.
-        </p>
-      </div>
+      <PageHeader
+        title="Historical Portfolio Construction"
+        description="Given the frozen ML expected-return signal and a historical covariance estimate, what portfolio did RiskFecta construct at this historical formation date? This is a historical research construction — not a live recommendation, current allocation, or forward-looking promise."
+      />
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-border bg-secondary/40 px-4 py-2 text-xs text-muted-foreground">
         <span>

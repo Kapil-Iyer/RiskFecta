@@ -144,6 +144,15 @@ button {
   font-family: inherit;
 }
 
+/* Active nav-tab indicator — plain CSS (not a Tailwind arbitrary-value
+   shadow utility) so it doesn't pull in Tailwind's inset-shadow custom-
+   property registration for what is otherwise a single decorative rule.
+   Keyed off `aria-current="page"`, which react-router's NavLink already
+   sets on the active link — no separate isActive class needed. */
+nav[aria-label="Research surfaces"] a[aria-current="page"] {
+  box-shadow: inset 0 -2px 0 0 var(--color-accent);
+}
+
 :focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;

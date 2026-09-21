@@ -8,6 +8,7 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import LoadingState from "../components/LoadingState";
 import ErrorState from "../components/ErrorState";
+import PageHeader from "../components/PageHeader";
 import PlotlyChart from "../components/PlotlyChart";
 import { DARK_CHART_LAYOUT } from "../components/chartTheme";
 import { sectionMotion, sectionTransition } from "../pageMotion";
@@ -92,13 +93,10 @@ export default function RiskAnalyticsPage() {
 
   return (
     <motion.div {...sectionMotion} transition={sectionTransition} className="app-page">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-xl font-semibold text-foreground">Risk Analytics</h1>
-        <p className="max-w-3xl text-sm text-muted-foreground">
-          Formation-time predicted portfolio risk under the frozen Phase 7 covariance methodology — which positions
-          actually drive the portfolio's predicted volatility, not just which positions are largest by capital.
-        </p>
-      </div>
+      <PageHeader
+        title="Risk Analytics"
+        description="Formation-time predicted portfolio risk under the frozen Phase 7 covariance methodology — which positions actually drive the portfolio's predicted volatility, not just which positions are largest by capital."
+      />
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-border bg-secondary/40 px-4 py-2 text-xs text-muted-foreground">
         <span>21-session horizon</span>

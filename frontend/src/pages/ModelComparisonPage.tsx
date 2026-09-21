@@ -12,6 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import LoadingState from "../components/LoadingState";
 import ErrorState from "../components/ErrorState";
 import ModelMetricChart from "../components/ModelMetricChart";
+import PageHeader from "../components/PageHeader";
 import { sectionMotion, sectionTransition } from "../pageMotion";
 
 function formatMetricValue(row: ModelMetricRow, metric: MetricDefinition): string {
@@ -51,13 +52,10 @@ export default function ModelComparisonPage() {
 
   return (
     <motion.div {...sectionMotion} transition={sectionTransition} className="app-page">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-xl font-semibold text-foreground">Model Comparison</h1>
-        <p className="max-w-3xl text-sm text-muted-foreground">
-          What each forecasting approach actually achieved during the frozen historical walk-forward
-          experiment — baselines and machine-learning models, scored identically, side by side.
-        </p>
-      </div>
+      <PageHeader
+        title="Model Comparison"
+        description="What each forecasting approach actually achieved during the frozen historical walk-forward experiment — baselines and machine-learning models, scored identically, side by side."
+      />
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-border bg-secondary/40 px-4 py-2 text-xs text-muted-foreground">
         <span>

@@ -11,6 +11,7 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import LoadingState from "../components/LoadingState";
 import ErrorState from "../components/ErrorState";
+import PageHeader from "../components/PageHeader";
 import { sectionMotion, sectionTransition } from "../pageMotion";
 import { MODEL_OPTIONS, rankPredictions, type ModelKey } from "./forecastRanking";
 
@@ -67,14 +68,10 @@ export default function ForecastRankingsPage() {
 
   return (
     <motion.div {...sectionMotion} transition={sectionTransition} className="app-page">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-xl font-semibold text-foreground">Forecast Rankings</h1>
-        <p className="max-w-3xl text-sm text-muted-foreground">
-          21-trading-session forward-return forecasts from the frozen pooled XGBoost model, pooled
-          LSTM model, and their 50/50 ensemble — historical walk-forward out-of-sample evidence,
-          not a live or current-day market forecast.
-        </p>
-      </div>
+      <PageHeader
+        title="Forecast Rankings"
+        description="21-trading-session forward-return forecasts from the frozen pooled XGBoost model, pooled LSTM model, and their 50/50 ensemble — historical walk-forward out-of-sample evidence, not a live or current-day market forecast."
+      />
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-border bg-secondary/40 px-4 py-2 text-xs text-muted-foreground">
         <span>
